@@ -188,7 +188,7 @@ RULES: tuple[Rule, ...] = (
         "backend/MIR-body module changes need the structural syntax-front-end import check",
     ),
     Rule(
-        ("tools/toolchain/compiler-coverage.sh", "tools/toolchain/compiler-coverage-baseline.tsv", "docs/compiler-coverage.md"),
+        ("tools/toolchain/compiler-coverage.sh", "tools/toolchain/compiler-coverage-baseline.tsv"),
         ("compiler-coverage",),
         "compiler coverage ratchet changes need the compiler coverage gate",
     ),

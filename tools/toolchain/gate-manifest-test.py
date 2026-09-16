@@ -12,7 +12,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "docs" / "gate-manifest.json"
-REFACTORING_PLAN = ROOT / "docs" / "refactoring-plan.md"
+REFACTORING_PLAN = ROOT / "docs" / "todo.md"
 BUILD_DIR = ROOT / "build"
 TIERS = BUILD_DIR / "tiers.zig"
 

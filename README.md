@@ -5,16 +5,15 @@ in freestanding systems code. It explores a specific question: how much
 low-level machine behavior can be made explicit and checkable without hiding
 allocation, control flow, hardware access, or optimizer assumptions?
 
-MC is a research prototype, not a general C replacement. The compiler has
-two differentially validated backend paths for the documented, implemented subset:
-
-- checked C emission;
-- textual LLVM IR emission and object generation.
+MC is a research prototype, not a general C replacement. The compiler emits
+checked C for the documented, implemented subset. A second lowering to textual
+LLVM IR is kept as a differential oracle: it lowers the same verified program by
+an unrelated route, so a disagreement between the two is evidence that one is
+wrong.
 
 The useful claim is deliberately narrow: within the tested subset, MC either
 emits the documented lowering or rejects the unsupported construct. Current
-language and compiler work is tracked in [`docs/todo.md`](docs/todo.md) and
-[`docs/refactoring-plan.md`](docs/refactoring-plan.md).
+language and compiler work is tracked in [`docs/todo.md`](docs/todo.md).
 
 ## Why MC Exists
 
@@ -135,13 +134,17 @@ and `opt` from `PATH`. A validated run must resolve those names to the LLVM 18 t
 The compiler pipeline is:
 
 ```text
-source -> AST -> semantic analysis -> MIR -> MIR verification -> C or LLVM
+source -> AST -> sema (diagnostics, DefIds, resolved types) -> MIR -> MIR verification -> C
+                                                                                     \-> LLVM (oracle)
 
 semantic representation -> optional HIR inspection / HIR verification
 ```
 
-Inspection projections are debug/report surfaces only; MIR verification is the
-backend semantic boundary.
+Sema assigns every declaration a `DefId` and records an interned resolved type
+for every expression it types; the MIR builder reads those rather than
+re-inferring from syntax. Inspection projections are debug/report surfaces
+only; MIR verification is the backend semantic boundary. The current state of
+that handoff is in [`docs/typed-semantic-facts.md`](docs/typed-semantic-facts.md).
 
 `extern "C" fn` and unmarked `export fn` use a strict, target-classified C ABI
 surface. `#[mc_abi] export fn` is available for same-backend object boundaries and
@@ -313,15 +316,14 @@ normalization, but code/comment internal spacing on that line is intentionally c
 
 ## Current Boundaries
 
-Three compiler architecture workstreams are closed only for the currently
-admitted supported subset and reopen when a new semantic/projection/pointer-flow
-family is admitted:
+What is closed, and the test that keeps it closed, is tabulated in
+[`docs/todo.md`](docs/todo.md). The open architecture work, in priority order,
+is there too: collapsing MIR to its single typed body, replacing the
+string-carrying MIR value type with type ids, and finishing the sema-to-MIR
+handoff. Known backend gaps are named in
+[`docs/backend-expected-failures.json`](docs/backend-expected-failures.json).
 
-1. pointer-provenance handling for race-tolerant lowering;
-2. typed semantic facts and typed MIR as backend semantic authority;
-3. CFG/place-based move ownership analysis.
-
-Other deliberate or current limitations include:
+Deliberate or current limitations include:
 
 - no general lifetime or borrow checker;
 - value-level comptime rather than unrestricted type computation;

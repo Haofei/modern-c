@@ -136,7 +136,7 @@ Two limitations worth naming:
   not fix the ambiguity the span key has. Where one span resolves two ways the
   entry stops answering and the builder falls back, so the key fails closed.
 
-The rest is tracked in [`refactoring-plan.md`](refactoring-plan.md).
+The rest is tracked in [`todo.md`](todo.md).
 
 ## The rule
 

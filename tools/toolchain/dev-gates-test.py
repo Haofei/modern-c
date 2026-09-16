@@ -208,7 +208,6 @@ def main() -> None:
     assert_gates_include(module, ["src/mir_tests.zig"], ["test"])
     assert_gates(module, ["tools/toolchain/compiler-coverage.sh"], ["compiler-coverage"])
     assert_gates(module, ["tools/toolchain/compiler-coverage-baseline.tsv"], ["compiler-coverage"])
-    assert_route(module, ["docs/compiler-coverage.md"], ["compiler-coverage"], ["git diff --check"])
     assert_gates(module, ["tools/toolchain/lowering-cov-instrument.py"], ["lowering-coverage", "compiler-coverage"])
     assert_route(
         module,

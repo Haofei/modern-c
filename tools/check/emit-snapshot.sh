@@ -6,7 +6,7 @@
 # structural refactor (file splits, build.zig decomposition) MUST reproduce a
 # byte-identical snapshot. This is NOT a correctness oracle — it only proves
 # "no observable change in emitted output", which is exactly the Phase 0/1/2
-# invariant in docs/refactor-plan.md.
+# invariant in docs/todo.md.
 #
 # Usage:
 #   tools/check/emit-snapshot.sh capture            # write baseline
@@ -38,7 +38,7 @@ hash_cmd() {
 
 # One job per (fixture, backend); print "file<TAB>backend<TAB>hash-or-ERR".
 # Exported for the xargs subshell. Parallelized to keep verify fast (this runs
-# after every Phase-2 split per docs/refactor-plan.md).
+# after every Phase-2 split per docs/todo.md).
 emit_one() {
   sub="$1"; file="$2"; tag="$3"
   out="$("$MCC" "$sub" "$file" 2>/dev/null)"; rc=$?
