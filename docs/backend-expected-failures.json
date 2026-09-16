@@ -9,11 +9,6 @@
       "note": "A non-extern global whose initializer shape has no admitted syntax-free plan; MIR admission fails closed rather than letting codegen re-read the AST."
     },
     {
-      "fixture": "tests/c_emit/mmio_ordering.mc",
-      "reason": "InvalidMirExecutableBody",
-      "note": "The typed executable body is incomplete for this fixture."
-    },
-    {
       "fixture": "tests/c_emit/pointer_field_addr.mc",
       "reason": "E_BACKEND_UNSUPPORTED",
       "note": "The C emitter cannot render this construct yet; emitVerifiedMirFunction declines it."
@@ -102,12 +97,6 @@
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
       "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
-    },
-    {
-      "fixture": "mmio_ordering.mc",
-      "stage": "EMIT",
-      "reason": "InvalidMirExecutableBody",
-      "note": "The typed executable body is incomplete for the kept chunk, so both emitters decline it at admission rather than rendering a partial body."
     },
     {
       "fixture": "move_borrow_escape.mc",

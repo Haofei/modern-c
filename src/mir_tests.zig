@@ -3406,6 +3406,31 @@ test "MIR plans a packed-bits global literal through the packed-bits fact layout
     try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
 }
 
+test "cpu.pause is admitted outside an unsafe region" {
+    // The spec's own MMIO example spins on `cpu.pause()` with no unsafe
+    // region, and the checker admits it. The executable-body verifier
+    // requires the call's unsafe authorization to equal the builtin table
+    // exactly, so the table must not list cpu.pause as unsafe-only.
+    const source =
+        \\fn spin(flag: bool) -> void {
+        \\    while !flag {
+        \\        cpu.pause();
+        \\    }
+        \\}
+        \\fn spin_unsafe(flag: bool) -> void {
+        \\    while !flag {
+        \\        unsafe { cpu.pause(); }
+        \\    }
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_cpu_pause_safe.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try std.testing.expect(!mir_model.executableBuiltinRequiresUnsafe(.cpu_pause));
+    try mir.validateLoweringAdmission(module_mir);
+}
+
 test "MIR exposes generic typed span identity matching for codegen facts" {
     const source =
         \\extern fn close_a(value: u32) -> void;

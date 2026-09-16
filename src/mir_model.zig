@@ -949,9 +949,14 @@ fn durationTypeSpellingMatches(spelling: []const u8, child: []const u8) bool {
         std.mem.eql(u8, spelling[prefix.len .. spelling.len - 1], child);
 }
 
+/// The builtins the language admits only inside an `unsafe` region. This must
+/// agree with the checker: the executable-body verifier requires the call's
+/// authorization flag to equal this exactly, in both directions.
+/// `cpu.pause()` is not here: the spec's own MMIO example spins on it outside
+/// any unsafe region.
 pub fn executableBuiltinRequiresUnsafe(kind: CallTargetKind) bool {
     return switch (kind) {
-        .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .declassify, .forget_unchecked, .cpu_pause => true,
+        .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .declassify, .forget_unchecked => true,
         else => false,
     };
 }
