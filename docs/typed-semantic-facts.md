@@ -57,8 +57,13 @@ Not yet typed — the honest list:
 - **`ValueType` is stringly typed** (`integer: []const u8`, `struct_: []const u8`)
   and mirrored by parallel `TypeId` / `SignatureTypeId` fields; `Instruction`
   carries both `result_ty: ValueType` and `typed_result_ty: TypeId`.
-- **Facts are joined by `SpanId`** across 31 `*Fact` tables rather than hanging
-  off typed nodes.
+- **Instruction-scoped facts are not yet fields on the typed node.** They key
+  on the instruction's identity now rather than on a source span -- integer,
+  float, bounds, representation, target-type, call-target, `const_get`, bind
+  thunk and range facts all carry a `typed_inst_id` -- but they are still
+  side tables the verifier joins, not data hanging off `ExecutableBody`.
+  Resolved accesses key on an `AccessId` for the same reason; pointer
+  provenance keys on the place it describes.
 
 ## The sema-to-MIR handoff
 
