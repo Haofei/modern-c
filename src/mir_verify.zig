@@ -24,6 +24,7 @@ const BuildOptions = mir_model.BuildOptions;
 const CallTargetFact = mir_model.CallTargetFact;
 const CallTargetKind = mir_model.CallTargetKind;
 const CallableKind = mir_model.CallableKind;
+const ConstGetFact = mir_model.ConstGetFact;
 const CheckedCallableFact = mir_model.CheckedCallableFact;
 const EnumCaseFact = mir_model.EnumCaseFact;
 const EnumFact = mir_model.EnumFact;
@@ -813,6 +814,10 @@ pub fn integerFactTargetType(function: *const Function, fact: IntegerFact) ?Valu
 pub fn validateConstGetFactsForLowering(module: Module) error{InvalidMirConstGetFacts}!void {
     for (module.functions) |function| {
         for (function.blocks) |block| for (block.instructions) |instruction| {
+            // The four instructions one `const_get` expression emits (index,
+            // call target, base and result target types) are cross-checked by
+            // source: they are all stamped with the same span, so a copied
+            // expression copies all four together.
             if (callTargetKindForInstruction(instruction) == .const_get) {
                 const call_count = countConstGetCallTargetsAtSource(function, instruction.typed_span_id);
                 if (countConstGetInstructionsAtSource(function, instruction.typed_span_id) != call_count) return error.InvalidMirConstGetFacts;
@@ -825,14 +830,14 @@ pub fn validateConstGetFactsForLowering(module: Module) error{InvalidMirConstGet
                 continue;
             }
             if (countConstGetCallTargetsAtSource(function, instruction.typed_span_id) != countConstGetInstructionsAtSource(function, instruction.typed_span_id)) return error.InvalidMirConstGetFacts;
-            const index = instruction.const_index orelse return error.InvalidMirConstGetFacts;
-            const fact_count = countMatchingConstGetFacts(function, index, instruction.typed_span_id);
-            if (fact_count == 0 or fact_count != countMatchingConstGetInstructions(function, index, instruction.typed_span_id)) return error.InvalidMirConstGetFacts;
+            if (instruction.const_index == null) return error.InvalidMirConstGetFacts;
+            if (countMatchingConstGetFacts(function, instruction) != 1) return error.InvalidMirConstGetFacts;
         };
         for (function.const_get_facts) |fact| {
+            if (!fact.typed_inst_id.isValid()) return error.InvalidMirConstGetFacts;
             if (!fact.typed_span_id.isValid() or sourcePointForSpanId(function, fact.typed_span_id) == null) return error.InvalidMirConstGetFacts;
-            const instruction_count = countMatchingConstGetInstructions(function, fact.index, fact.typed_span_id);
-            if (instruction_count == 0 or instruction_count != countMatchingConstGetFacts(function, fact.index, fact.typed_span_id)) return error.InvalidMirConstGetFacts;
+            if (countMatchingConstGetInstructions(function, fact) != 1) return error.InvalidMirConstGetFacts;
+            if (countConstGetFactsSharingIdentity(function, fact) != 1) return error.InvalidMirConstGetFacts;
         }
     }
 }
@@ -861,35 +866,54 @@ fn countTargetTypeInstructionsAtSource(function: Function, kind: TargetTypeKind,
     return count;
 }
 
-fn countMatchingConstGetFacts(function: Function, index: usize, span_id: SpanId) usize {
+/// A fact describes a `const_get` index instruction when it names it by
+/// identity and still agrees with it about the constant index and the span.
+/// The identity, not the span, is the join key; see
+/// `integerFactMatchesInstruction`.
+fn constGetFactMatchesInstruction(function: Function, fact: ConstGetFact, instruction: Instruction) bool {
+    if (instruction.kind != .index or !std.mem.eql(u8, instruction.detail, "const_get")) return false;
+    if (!fact.typed_inst_id.isValid() or !fact.typed_inst_id.eql(instruction.typed_inst_id)) return false;
+    const index = instruction.const_index orelse return false;
+    return index == fact.index and instructionMatchesSpanId(function, instruction, fact.typed_span_id);
+}
+
+fn countMatchingConstGetFacts(function: Function, instruction: Instruction) usize {
     var count: usize = 0;
     for (function.const_get_facts) |fact| {
-        if (fact.index == index and fact.typed_span_id.eql(span_id)) count += 1;
+        if (constGetFactMatchesInstruction(function, fact, instruction)) count += 1;
     }
     return count;
 }
 
-fn countMatchingConstGetInstructions(function: Function, index: usize, span_id: SpanId) usize {
+fn countMatchingConstGetInstructions(function: Function, fact: ConstGetFact) usize {
     var count: usize = 0;
     for (function.blocks) |block| for (block.instructions) |instruction| {
-        if (instruction.kind != .index or !std.mem.eql(u8, instruction.detail, "const_get")) continue;
-        if (instruction.const_index == index and instructionMatchesSpanId(function, instruction, span_id)) count += 1;
+        if (constGetFactMatchesInstruction(function, fact, instruction)) count += 1;
     };
     return count;
 }
 
+fn countConstGetFactsSharingIdentity(function: Function, target: ConstGetFact) usize {
+    var count: usize = 0;
+    for (function.const_get_facts) |fact| {
+        if (fact.typed_inst_id.eql(target.typed_inst_id)) count += 1;
+    }
+    return count;
+}
+
+/// One `call_target` instruction, one fact, joined on the instruction
+/// identity. Kind, result type and callee-span agreement are kept alongside
+/// the identity so a retargeted fact still fails.
 pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTargetFacts}!void {
     for (module.functions) |function| {
         for (function.blocks) |block| for (block.instructions) |instruction| {
-            const kind = callTargetKindForInstruction(instruction) orelse continue;
-            const fact_count = countMatchingCallTargetFacts(function, kind, instruction);
-            if (fact_count == 0 or fact_count != countMatchingCallTargetInstructionsForInstruction(function, kind, instruction)) return error.InvalidMirCallTargetFacts;
-            if (!matchingCallTargetFactsAgreeForInstruction(function, instruction)) return error.InvalidMirCallTargetFacts;
+            if (callTargetKindForInstruction(instruction) == null) continue;
+            if (countMatchingCallTargetFacts(function, instruction) != 1) return error.InvalidMirCallTargetFacts;
         };
         for (function.call_target_facts) |fact| {
             if (!callTargetFactTypedIdentityValid(function, fact)) return error.InvalidMirCallTargetFacts;
-            const instruction_count = countMatchingCallTargetInstructions(function, fact);
-            if (instruction_count == 0 or instruction_count != countMatchingCallTargetFactsForFact(function, fact)) return error.InvalidMirCallTargetFacts;
+            if (countMatchingCallTargetInstructions(function, fact) != 1) return error.InvalidMirCallTargetFacts;
+            if (countMatchingCallTargetFactsForFact(function, fact) != 1) return error.InvalidMirCallTargetFacts;
         }
     }
 }
@@ -1646,16 +1670,14 @@ pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTarge
         }
         for (function.blocks) |block| for (block.instructions) |instruction| {
             const kind = targetTypeKindForInstruction(instruction) orelse continue;
-            const fact_count = countMatchingTargetTypeFacts(function, kind, instruction);
-            if (fact_count == 0 or fact_count != countMatchingTargetTypeInstructionsForInstruction(function, kind, instruction)) {
+            if (countMatchingTargetTypeFacts(function, kind, instruction) != 1) {
                 if (hasStaleTargetTypeFact(function, kind, instruction)) return error.StaleMirTargetTypeFacts;
                 return error.InvalidMirTargetTypeFacts;
             }
-            if (!matchingTargetTypeFactsAgree(function, kind, instruction)) return error.InvalidMirTargetTypeFacts;
         };
         for (function.target_type_facts) |fact| {
-            const instruction_count = countMatchingTargetTypeInstructions(function, fact);
-            if (instruction_count == 0 or instruction_count != countMatchingTargetTypeFactsForFact(function, fact)) return error.InvalidMirTargetTypeFacts;
+            if (countMatchingTargetTypeInstructions(function, fact) != 1) return error.InvalidMirTargetTypeFacts;
+            if (countMatchingTargetTypeFactsForFact(function, fact) != 1) return error.InvalidMirTargetTypeFacts;
         }
     }
 }
@@ -1679,6 +1701,7 @@ fn isResultOrNullableTargetType(ty: ValueType) bool {
 }
 
 fn targetTypeFactTypedIdentitiesValid(signature_types: SignatureTypeTable, function: Function, fact: TargetTypeFact) bool {
+    if (!fact.typed_inst_id.isValid()) return false;
     if (!fact.target_type_id.isValid() or !signature_types.contains(fact.target_type_id)) return false;
     if (!fact.typed_result_ty.isValid()) return false;
     const result_index = fact.typed_result_ty.index();
@@ -1739,21 +1762,6 @@ fn targetTypeTypedSpanCompatible(instruction: Instruction, fact: TargetTypeFact)
     return !fact.typed_span_id.isValid();
 }
 
-fn targetTypeInstructionOwnersCompatible(left: Instruction, right: Instruction) bool {
-    if (left.typed_target_owner_id) |left_owner_id| {
-        const right_owner_id = right.typed_target_owner_id orelse return false;
-        return right_owner_id.eql(left_owner_id);
-    }
-    return right.typed_target_owner_id == null;
-}
-
-fn targetTypeInstructionSpansCompatible(left: Instruction, right: Instruction) bool {
-    if (left.typed_span_id.isValid()) {
-        return right.typed_span_id.isValid() and right.typed_span_id.eql(left.typed_span_id);
-    }
-    return !right.typed_span_id.isValid();
-}
-
 fn targetTypeTypedCalleeSpanCompatible(instruction: Instruction, fact: TargetTypeFact) bool {
     if (fact.kind == .for_element) {
         return !fact.typed_callee_span_id.isValid() and !instruction.typed_callee_span_id.isValid() and
@@ -1769,29 +1777,9 @@ fn targetTypeTypedCalleeSpanCompatible(instruction: Instruction, fact: TargetTyp
     return !fact.typed_operand_value_id.isValid() or fact.typed_operand_value_id.eql(instruction.typed_operand_value_id);
 }
 
-fn targetTypeInstructionCalleeSpansCompatible(left: Instruction, right: Instruction, kind: TargetTypeKind) bool {
-    if (kind == .for_element) {
-        return !left.typed_callee_span_id.isValid() and !right.typed_callee_span_id.isValid() and
-            left.typed_operand_value_id.isValid() and right.typed_operand_value_id.isValid() and
-            left.typed_operand_value_id.eql(right.typed_operand_value_id);
-    }
-    if (kind != .direct_call_argument and kind != .indirect_call_argument) {
-        return !left.typed_callee_span_id.isValid() and !right.typed_callee_span_id.isValid() and !left.typed_operand_value_id.isValid() and !right.typed_operand_value_id.isValid();
-    }
-    if (!left.typed_callee_span_id.isValid() or !right.typed_callee_span_id.isValid() or !left.typed_callee_span_id.eql(right.typed_callee_span_id)) return false;
-    if (kind == .indirect_call_argument and (!left.typed_operand_value_id.isValid() or !right.typed_operand_value_id.isValid())) return false;
-    if (left.typed_operand_value_id.isValid() != right.typed_operand_value_id.isValid()) return false;
-    return !left.typed_operand_value_id.isValid() or left.typed_operand_value_id.eql(right.typed_operand_value_id);
-}
-
 fn targetTypeSourceMatches(kind: TargetTypeKind, fact: TargetTypeFact, instruction: Instruction) bool {
     _ = kind;
     return fact.typed_span_id.eql(instruction.typed_span_id);
-}
-
-fn targetTypeInstructionSourceMatches(kind: TargetTypeKind, left: Instruction, right: Instruction) bool {
-    _ = kind;
-    return left.typed_span_id.eql(right.typed_span_id);
 }
 
 fn targetTypeSyntaxMatches(fact: TargetTypeFact, instruction: Instruction) bool {
@@ -1800,38 +1788,37 @@ fn targetTypeSyntaxMatches(fact: TargetTypeFact, instruction: Instruction) bool 
         fact.aggregate_construction == instruction.aggregate_construction;
 }
 
-fn hasStaleTargetTypeFact(function: Function, kind: TargetTypeKind, instruction: Instruction) bool {
-    for (function.target_type_facts) |fact| {
-        if (fact.kind != kind) continue;
-        if (fact.target_index != instruction.target_index) continue;
-        if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
-        if (!targetTypeTypedResultCompatible(instruction, fact)) continue;
-        if (!targetTypeTypedSpanCompatible(instruction, fact)) continue;
-        if (!targetTypeTypedCalleeSpanCompatible(instruction, fact)) continue;
-        if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
-        if (!targetTypeSourceMatches(kind, fact, instruction)) continue;
-        if (!targetTypeSyntaxMatches(fact, instruction)) return true;
-    }
-    return false;
+/// A fact agrees with a `target_type` instruction when it names it by
+/// identity and still matches its kind, target index, owner, result type,
+/// span, callee span and operand identity. Syntax agreement is checked
+/// separately so a stale target type can be reported as such.
+fn targetTypeFactAgreesWithInstruction(kind: TargetTypeKind, fact: TargetTypeFact, instruction: Instruction) bool {
+    if (!fact.typed_inst_id.isValid() or !fact.typed_inst_id.eql(instruction.typed_inst_id)) return false;
+    if (fact.kind != kind) return false;
+    if (fact.target_index != instruction.target_index) return false;
+    if (!targetTypeTypedOwnerCompatible(instruction, fact)) return false;
+    if (!targetTypeTypedResultCompatible(instruction, fact)) return false;
+    if (!targetTypeTypedSpanCompatible(instruction, fact)) return false;
+    if (!targetTypeTypedCalleeSpanCompatible(instruction, fact)) return false;
+    if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) return false;
+    return targetTypeSourceMatches(kind, fact, instruction);
 }
 
-fn targetTypeInstructionsSyntaxMatch(left: Instruction, right: Instruction) bool {
-    return left.target_type_id.isValid() and right.target_type_id.isValid() and
-        left.target_type_id.eql(right.target_type_id) and left.aggregate_construction == right.aggregate_construction;
+fn targetTypeFactMatchesInstruction(kind: TargetTypeKind, fact: TargetTypeFact, instruction: Instruction) bool {
+    return targetTypeFactAgreesWithInstruction(kind, fact, instruction) and targetTypeSyntaxMatches(fact, instruction);
+}
+
+fn hasStaleTargetTypeFact(function: Function, kind: TargetTypeKind, instruction: Instruction) bool {
+    for (function.target_type_facts) |fact| {
+        if (targetTypeFactAgreesWithInstruction(kind, fact, instruction) and !targetTypeSyntaxMatches(fact, instruction)) return true;
+    }
+    return false;
 }
 
 fn countMatchingTargetTypeFacts(function: Function, kind: TargetTypeKind, instruction: Instruction) usize {
     var count: usize = 0;
     for (function.target_type_facts) |fact| {
-        if (fact.kind != kind) continue;
-        if (fact.target_index != instruction.target_index) continue;
-        if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
-        if (!targetTypeTypedResultCompatible(instruction, fact)) continue;
-        if (!targetTypeTypedSpanCompatible(instruction, fact)) continue;
-        if (!targetTypeTypedCalleeSpanCompatible(instruction, fact)) continue;
-        if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
-        if (!targetTypeSyntaxMatches(fact, instruction)) continue;
-        if (targetTypeSourceMatches(kind, fact, instruction)) count += 1;
+        if (targetTypeFactMatchesInstruction(kind, fact, instruction)) count += 1;
     }
     return count;
 }
@@ -1840,31 +1827,7 @@ fn countMatchingTargetTypeInstructions(function: Function, fact: TargetTypeFact)
     var count: usize = 0;
     for (function.blocks) |block| for (block.instructions) |instruction| {
         const kind = targetTypeKindForInstruction(instruction) orelse continue;
-        if (kind != fact.kind) continue;
-        if (instruction.target_index != fact.target_index) continue;
-        if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
-        if (!targetTypeTypedResultCompatible(instruction, fact)) continue;
-        if (!targetTypeTypedSpanCompatible(instruction, fact)) continue;
-        if (!targetTypeTypedCalleeSpanCompatible(instruction, fact)) continue;
-        if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
-        if (!targetTypeSyntaxMatches(fact, instruction)) continue;
-        if (targetTypeSourceMatches(kind, fact, instruction)) count += 1;
-    };
-    return count;
-}
-
-fn countMatchingTargetTypeInstructionsForInstruction(function: Function, kind: TargetTypeKind, target: Instruction) usize {
-    var count: usize = 0;
-    for (function.blocks) |block| for (block.instructions) |instruction| {
-        const instruction_kind = targetTypeKindForInstruction(instruction) orelse continue;
-        if (instruction_kind != kind) continue;
-        if (instruction.target_index != target.target_index) continue;
-        if (!targetTypeInstructionOwnersCompatible(instruction, target)) continue;
-        if (!targetTypeInstructionSpansCompatible(instruction, target)) continue;
-        if (!targetTypeInstructionCalleeSpansCompatible(instruction, target, kind)) continue;
-        if (!sameRepresentationValueType(instruction.result_ty, target.result_ty)) continue;
-        if (!targetTypeInstructionsSyntaxMatch(target, instruction)) continue;
-        if (targetTypeInstructionSourceMatches(kind, target, instruction)) count += 1;
+        if (targetTypeFactMatchesInstruction(kind, fact, instruction)) count += 1;
     };
     return count;
 }
@@ -1872,37 +1835,9 @@ fn countMatchingTargetTypeInstructionsForInstruction(function: Function, kind: T
 fn countMatchingTargetTypeFactsForFact(function: Function, target: TargetTypeFact) usize {
     var count: usize = 0;
     for (function.target_type_facts) |fact| {
-        if (fact.kind != target.kind) continue;
-        if (fact.target_index != target.target_index) continue;
-        if (!fact.typed_target_owner_id.eql(target.typed_target_owner_id)) continue;
-        if (!fact.typed_result_ty.eql(target.typed_result_ty)) continue;
-        if (!fact.typed_span_id.eql(target.typed_span_id)) continue;
-        if (!fact.typed_callee_span_id.eql(target.typed_callee_span_id)) continue;
-        if (!fact.typed_operand_value_id.eql(target.typed_operand_value_id)) continue;
-        if (!sameRepresentationValueType(fact.result_ty, target.result_ty)) continue;
-        if (!fact.target_type_id.eql(target.target_type_id)) continue;
-        count += 1;
+        if (fact.typed_inst_id.eql(target.typed_inst_id)) count += 1;
     }
     return count;
-}
-
-fn matchingTargetTypeFactsAgree(function: Function, kind: TargetTypeKind, instruction: Instruction) bool {
-    var first: ?SignatureTypeId = null;
-    for (function.target_type_facts) |fact| {
-        if (fact.kind != kind) continue;
-        if (fact.target_index != instruction.target_index) continue;
-        if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
-        if (!targetTypeTypedResultCompatible(instruction, fact)) continue;
-        if (!targetTypeTypedSpanCompatible(instruction, fact)) continue;
-        if (!targetTypeTypedCalleeSpanCompatible(instruction, fact)) continue;
-        if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
-        if (!targetTypeSyntaxMatches(fact, instruction)) continue;
-        if (!targetTypeSourceMatches(kind, fact, instruction)) continue;
-        if (first) |expected| {
-            if (!expected.eql(fact.target_type_id)) return false;
-        } else first = fact.target_type_id;
-    }
-    return first != null;
 }
 
 fn callTargetKindForInstruction(instruction: Instruction) ?CallTargetKind {
@@ -1910,12 +1845,18 @@ fn callTargetKindForInstruction(instruction: Instruction) ?CallTargetKind {
     return std.meta.stringToEnum(CallTargetKind, instruction.detail);
 }
 
-fn countMatchingCallTargetFacts(function: Function, kind: CallTargetKind, instruction: Instruction) usize {
+fn callTargetFactMatchesInstruction(fact: CallTargetFact, instruction: Instruction) bool {
+    const kind = callTargetKindForInstruction(instruction) orelse return false;
+    if (!fact.typed_inst_id.isValid() or !fact.typed_inst_id.eql(instruction.typed_inst_id)) return false;
+    return fact.kind == kind and
+        sameRepresentationValueType(fact.result_ty, instruction.result_ty) and
+        fact.typed_span_id.isValid() and fact.typed_span_id.eql(instruction.typed_callee_span_id);
+}
+
+fn countMatchingCallTargetFacts(function: Function, instruction: Instruction) usize {
     var count: usize = 0;
     for (function.call_target_facts) |fact| {
-        if (fact.kind != kind) continue;
-        if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
-        if (fact.typed_span_id.isValid() and fact.typed_span_id.eql(instruction.typed_callee_span_id)) count += 1;
+        if (callTargetFactMatchesInstruction(fact, instruction)) count += 1;
     }
     return count;
 }
@@ -1923,21 +1864,7 @@ fn countMatchingCallTargetFacts(function: Function, kind: CallTargetKind, instru
 fn countMatchingCallTargetInstructions(function: Function, fact: CallTargetFact) usize {
     var count: usize = 0;
     for (function.blocks) |block| for (block.instructions) |instruction| {
-        const kind = callTargetKindForInstruction(instruction) orelse continue;
-        if (kind != fact.kind) continue;
-        if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
-        if (fact.typed_span_id.isValid() and fact.typed_span_id.eql(instruction.typed_callee_span_id)) count += 1;
-    };
-    return count;
-}
-
-fn countMatchingCallTargetInstructionsForInstruction(function: Function, kind: CallTargetKind, target: Instruction) usize {
-    var count: usize = 0;
-    for (function.blocks) |block| for (block.instructions) |instruction| {
-        const instruction_kind = callTargetKindForInstruction(instruction) orelse continue;
-        if (instruction_kind != kind) continue;
-        if (!sameRepresentationValueType(instruction.result_ty, target.result_ty)) continue;
-        if (instruction.typed_callee_span_id.isValid() and instruction.typed_callee_span_id.eql(target.typed_callee_span_id)) count += 1;
+        if (callTargetFactMatchesInstruction(fact, instruction)) count += 1;
     };
     return count;
 }
@@ -1945,29 +1872,13 @@ fn countMatchingCallTargetInstructionsForInstruction(function: Function, kind: C
 fn countMatchingCallTargetFactsForFact(function: Function, target: CallTargetFact) usize {
     var count: usize = 0;
     for (function.call_target_facts) |fact| {
-        if (fact.kind != target.kind) continue;
-        if (!sameRepresentationValueType(fact.result_ty, target.result_ty)) continue;
-        if (!fact.typed_span_id.eql(target.typed_span_id)) continue;
-        count += 1;
+        if (fact.typed_inst_id.eql(target.typed_inst_id)) count += 1;
     }
     return count;
 }
 
-fn matchingCallTargetFactsAgreeForInstruction(function: Function, instruction: Instruction) bool {
-    var first: ?CallTargetKind = null;
-    for (function.call_target_facts) |fact| {
-        if (!fact.typed_span_id.isValid() or !fact.typed_span_id.eql(instruction.typed_callee_span_id)) continue;
-        if (first) |expected| {
-            if (fact.kind != expected) return false;
-        } else {
-            first = fact.kind;
-        }
-    }
-    return first != null;
-}
-
 fn callTargetFactTypedIdentityValid(function: Function, fact: CallTargetFact) bool {
-    return sourcePointForSpanId(function, fact.typed_span_id) != null;
+    return fact.typed_inst_id.isValid() and sourcePointForSpanId(function, fact.typed_span_id) != null;
 }
 
 fn integerFactTypedIdentitiesValid(function: Function, fact: IntegerFact) bool {

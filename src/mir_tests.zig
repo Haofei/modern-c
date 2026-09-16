@@ -3725,21 +3725,6 @@ fn duplicateCallTargetFact(function: *mir.Function, allocator: std.mem.Allocator
     function.call_target_facts = facts;
 }
 
-fn duplicateCallTargetInstruction(function: *mir.Function, allocator: std.mem.Allocator) !void {
-    for (function.blocks) |*block| {
-        for (block.instructions) |instruction| {
-            if (instruction.kind != .call_target) continue;
-            const instructions = try allocator.alloc(mir.Instruction, block.instructions.len + 1);
-            @memcpy(instructions[0..block.instructions.len], block.instructions);
-            instructions[block.instructions.len] = instruction;
-            allocator.free(block.instructions);
-            block.instructions = instructions;
-            return;
-        }
-    }
-    return error.TestUnexpectedResult;
-}
-
 fn duplicateTargetTypeFact(function: *mir.Function, allocator: std.mem.Allocator) !void {
     if (function.target_type_facts.len == 0) return error.TestUnexpectedResult;
     const facts = try allocator.alloc(mir.TargetTypeFact, function.target_type_facts.len + 1);
@@ -3747,6 +3732,20 @@ fn duplicateTargetTypeFact(function: *mir.Function, allocator: std.mem.Allocator
     facts[function.target_type_facts.len] = function.target_type_facts[0];
     allocator.free(function.target_type_facts);
     function.target_type_facts = facts;
+}
+
+/// Append a copy of the first target-type fact of `kind`.
+fn duplicateTargetTypeFactOfKind(function: *mir.Function, allocator: std.mem.Allocator, kind: mir.TargetTypeKind) !void {
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != kind) continue;
+        const facts = try allocator.alloc(mir.TargetTypeFact, function.target_type_facts.len + 1);
+        @memcpy(facts[0..function.target_type_facts.len], function.target_type_facts);
+        facts[function.target_type_facts.len] = fact;
+        allocator.free(function.target_type_facts);
+        function.target_type_facts = facts;
+        return;
+    }
+    return error.TestUnexpectedResult;
 }
 
 fn duplicateFloatFact(function: *mir.Function, allocator: std.mem.Allocator) !void {
@@ -8997,28 +8996,151 @@ test "MIR rejects duplicate call target facts" {
     try std.testing.expectError(error.InvalidMirCallTargetFacts, mir.validateCallTargetFactsForLowering(typed_mir));
 }
 
-test "MIR accepts matching call target multiplicity at one source point" {
+test "call target facts distinguish two targets that share one span" {
+    // Two `call_target` instructions at one span, each with its own fact:
+    // admitted, because the join key is the instruction identity. A copied
+    // instruction that keeps the original's identity is a duplicate and is
+    // still rejected, as is a copied fact.
     const source =
         \\enum E { bad }
         \\fn make(value: u32) -> Result<u32, E> { return ok(value); }
     ;
+    var parsed = try test_support.parseCheckedModule("mir_shared_span_call_target_facts.mc", source);
+    defer parsed.deinit();
 
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_call_target_multiplicity.mc", source);
-    defer reporter.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
-    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer typed_mir.deinit();
     const function = functionByNameMut(&typed_mir, "make").?;
+    try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
+    const original_fact = function.call_target_facts[0];
+    try std.testing.expect(original_fact.typed_inst_id.isValid());
+
+    const copy_inst_id = freshInstId(function);
+    const original_inst_id = try cloneInstructionWithInstId(function, std.testing.allocator, .call_target, "result_ok", copy_inst_id);
+    try std.testing.expect(original_inst_id.eql(original_fact.typed_inst_id));
+    // The copy has no fact yet.
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, mir.validateCallTargetFactsForLowering(typed_mir));
+
     try duplicateCallTargetFact(function, typed_mir.allocator);
-    try duplicateCallTargetInstruction(function, typed_mir.allocator);
+    function.call_target_facts[1].typed_inst_id = copy_inst_id;
     try mir.validateCallTargetFactsForLowering(typed_mir);
+
+    // Duplicate: both facts name one instruction.
+    function.call_target_facts[1].typed_inst_id = original_inst_id;
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, mir.validateCallTargetFactsForLowering(typed_mir));
+
+    // Retargeted kind under a correct identity still disagrees.
+    function.call_target_facts[1].typed_inst_id = copy_inst_id;
+    function.call_target_facts[1].kind = .result_err;
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, mir.validateCallTargetFactsForLowering(typed_mir));
+
+    // Absent identity fails closed.
+    function.call_target_facts[1].kind = original_fact.kind;
+    function.call_target_facts[1].typed_inst_id = .invalid;
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, mir.validateCallTargetFactsForLowering(typed_mir));
+}
+
+test "target type facts distinguish two targets that share one span" {
+    const source =
+        \\enum E { bad }
+        \\fn make(value: u32) -> Result<u32, E> { return ok(value); }
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_shared_span_target_type_facts.mc", source);
+    defer parsed.deinit();
+
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer typed_mir.deinit();
+    const function = functionByNameMut(&typed_mir, "make").?;
+    var original_fact: ?mir.TargetTypeFact = null;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind == .result_ok) original_fact = fact;
+    }
+    try std.testing.expect(original_fact != null);
+    try std.testing.expect(original_fact.?.typed_inst_id.isValid());
+
+    const copy_inst_id = freshInstId(function);
+    const original_inst_id = try cloneInstructionWithInstId(function, std.testing.allocator, .target_type, "result_ok", copy_inst_id);
+    try std.testing.expect(original_inst_id.eql(original_fact.?.typed_inst_id));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
+
+    try duplicateTargetTypeFactOfKind(function, typed_mir.allocator, .result_ok);
+    const copy_index = function.target_type_facts.len - 1;
+    function.target_type_facts[copy_index].typed_inst_id = copy_inst_id;
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+
+    // Duplicate: both facts name one instruction.
+    function.target_type_facts[copy_index].typed_inst_id = original_inst_id;
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
+
+    // Stale syntax under a correct identity is still reported as stale.
+    function.target_type_facts[copy_index].typed_inst_id = copy_inst_id;
+    for (function.blocks) |*block| for (block.instructions) |*instruction| {
+        if (instruction.typed_inst_id.eql(copy_inst_id)) instruction.target_type_id = .invalid;
+    };
+    try std.testing.expectError(error.StaleMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
+
+    // Absent identity fails closed.
+    function.target_type_facts[copy_index].typed_inst_id = .invalid;
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
+}
+
+test "const_get facts distinguish two accesses that share one span" {
+    // One `const_get` expression emits four instructions at one span. Copy
+    // all four under fresh identities, with their facts: admitted, because
+    // each fact names its own instruction.
+    const source =
+        \\fn get_word(values: [3]u32) -> u32 { return values.const_get<2>(); }
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_shared_span_const_get_facts.mc", source);
+    defer parsed.deinit();
+
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer typed_mir.deinit();
+    const function = functionByNameMut(&typed_mir, "get_word").?;
+    try std.testing.expectEqual(@as(usize, 1), function.const_get_facts.len);
+    const original_fact = function.const_get_facts[0];
+    try std.testing.expect(original_fact.typed_inst_id.isValid());
+
+    const index_copy_id = freshInstId(function);
+    const original_inst_id = try cloneInstructionWithInstId(function, std.testing.allocator, .index, "const_get", index_copy_id);
+    try std.testing.expect(original_inst_id.eql(original_fact.typed_inst_id));
+    const call_copy_id = freshInstId(function);
+    _ = try cloneInstructionWithInstId(function, std.testing.allocator, .call_target, "const_get", call_copy_id);
+    const base_copy_id = freshInstId(function);
+    _ = try cloneInstructionWithInstId(function, std.testing.allocator, .target_type, "const_get_base", base_copy_id);
+    const result_copy_id = freshInstId(function);
+    _ = try cloneInstructionWithInstId(function, std.testing.allocator, .target_type, "const_get_result", result_copy_id);
+
+    const facts = try std.testing.allocator.alloc(mir.ConstGetFact, 2);
+    facts[0] = original_fact;
+    facts[1] = original_fact;
+    facts[1].typed_inst_id = index_copy_id;
+    std.testing.allocator.free(function.const_get_facts);
+    function.const_get_facts = facts;
+    try duplicateCallTargetFact(function, typed_mir.allocator);
+    function.call_target_facts[function.call_target_facts.len - 1].typed_inst_id = call_copy_id;
+    try duplicateTargetTypeFactOfKind(function, typed_mir.allocator, .const_get_base);
+    function.target_type_facts[function.target_type_facts.len - 1].typed_inst_id = base_copy_id;
+    try duplicateTargetTypeFactOfKind(function, typed_mir.allocator, .const_get_result);
+    function.target_type_facts[function.target_type_facts.len - 1].typed_inst_id = result_copy_id;
+
+    try mir.validateConstGetFactsForLowering(typed_mir);
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+
+    // Duplicate: both const_get facts name one index instruction.
+    function.const_get_facts[1].typed_inst_id = original_inst_id;
+    try std.testing.expectError(error.InvalidMirConstGetFacts, mir.validateConstGetFactsForLowering(typed_mir));
+
+    // Retargeted index under a correct identity still disagrees.
+    function.const_get_facts[1].typed_inst_id = index_copy_id;
+    function.const_get_facts[1].index = 1;
+    try std.testing.expectError(error.InvalidMirConstGetFacts, mir.validateConstGetFactsForLowering(typed_mir));
+
+    // Absent identity fails closed.
+    function.const_get_facts[1].index = original_fact.index;
+    function.const_get_facts[1].typed_inst_id = .invalid;
+    try std.testing.expectError(error.InvalidMirConstGetFacts, mir.validateConstGetFactsForLowering(typed_mir));
 }
 
 test "MIR call target facts do not collide with ordinary call names" {

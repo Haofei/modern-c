@@ -13298,11 +13298,12 @@ pub const FunctionBuilder = struct {
             .call => |node| {
                 if (self.constGetCallTarget(node)) |target| {
                     try self.addConstGetInstr(target.result_ty, target.index, expr.span);
+                    const const_get_inst_id = self.last_inst_id;
                     try self.addInstr(.call_target, @tagName(CallTargetKind.const_get), target.result_ty, expr.span);
                     try self.addCallTargetFact(.const_get, target.result_ty, node.callee.*.span);
                     try self.appendTargetTypeFact(.const_get_base, target.base_type_expr, target.base_ty, expr.span);
                     try self.appendTargetTypeFact(.const_get_result, target.result_type_expr, target.result_ty, expr.span);
-                    try self.const_get_facts.append(self.allocator, .{ .index = target.index, .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)) });
+                    try self.const_get_facts.append(self.allocator, .{ .index = target.index, .typed_inst_id = const_get_inst_id, .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)) });
                     if (representationCheckKind(target.result_ty) != null) {
                         try self.addInstr(.typed_load, exprText(expr), target.result_ty, expr.span);
                         try self.addRuntimeRepresentationCheck(target.result_ty, expr.span, exprText(expr));
@@ -14815,15 +14816,16 @@ pub const FunctionBuilder = struct {
     fn addCallTargetFact(self: *FunctionBuilder, kind: CallTargetKind, result_ty: ValueType, span: ast.Span) !void {
         const source = self.sourcePoint(span);
         const typed_span_id = try self.internSpanId(source);
-        try self.call_target_facts.append(self.allocator, .{
-            .kind = kind,
-            .result_ty = result_ty,
-            .typed_span_id = typed_span_id,
-        });
         const instructions = &self.blocks.items[self.current].instructions;
         if (instructions.items.len == 0) return error.UnsupportedMirConstruction;
         const instruction = &instructions.items[instructions.items.len - 1];
         if (instruction.kind != .call_target or !std.mem.eql(u8, instruction.detail, @tagName(kind)) or !sameRepresentationValueType(instruction.result_ty, result_ty)) return error.UnsupportedMirConstruction;
+        try self.call_target_facts.append(self.allocator, .{
+            .kind = kind,
+            .result_ty = result_ty,
+            .typed_inst_id = instruction.typed_inst_id,
+            .typed_span_id = typed_span_id,
+        });
         // A call-target instruction remains located at the full expression for
         // diagnostics and control-flow verification. Its secondary span is the
         // exact fact anchor (callee token for ordinary builtins, full call for
@@ -15463,6 +15465,7 @@ pub const FunctionBuilder = struct {
             .target_type_id = target_type_id,
             .result_ty = result_ty,
             .typed_result_ty = typed_result_ty,
+            .typed_inst_id = instructions.items[instructions.items.len - 1].typed_inst_id,
             .typed_span_id = typed_span_id,
         });
     }
@@ -15489,6 +15492,7 @@ pub const FunctionBuilder = struct {
             .target_type_id = target_type_id,
             .result_ty = result_ty,
             .typed_result_ty = typed_result_ty,
+            .typed_inst_id = instructions.items[instructions.items.len - 1].typed_inst_id,
             .typed_span_id = typed_span_id,
             .target_index = target_index,
             .typed_target_owner_id = typed_target_owner_id,

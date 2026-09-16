@@ -3391,6 +3391,9 @@ pub const FloatFact = struct {
 
 pub const ConstGetFact = struct {
     index: usize,
+    /// The `index const_get` instruction this fact describes. This is the
+    /// join key; see `BoundsFact.typed_inst_id` for why a span is not.
+    typed_inst_id: InstId = .invalid,
     typed_span_id: SpanId = .invalid,
 };
 
@@ -3486,8 +3489,13 @@ pub fn explicitTrapKindForTarget(kind: CallTargetKind) ?TrapKind {
 pub const CallTargetFact = struct {
     kind: CallTargetKind,
     result_ty: ValueType,
-    /// Sole source identity for this call-target fact. Display coordinates are
-    /// recovered from the owning function's span table.
+    /// The `call_target` instruction this fact describes. This is the join
+    /// key; see `BoundsFact.typed_inst_id` for why a span is not.
+    typed_inst_id: InstId = .invalid,
+    /// Source identity of the fact anchor (the callee token for ordinary
+    /// builtins, the full call otherwise), mirrored on the instruction as
+    /// `typed_callee_span_id`. Display coordinates are recovered from the
+    /// owning function's span table.
     typed_span_id: SpanId = .invalid,
 };
 
@@ -3643,6 +3651,9 @@ pub const TargetTypeFact = struct {
     target_type_id: SignatureTypeId = .invalid,
     result_ty: ValueType,
     typed_result_ty: TypeId = .invalid,
+    /// The `target_type` instruction this fact describes. This is the join
+    /// key; see `BoundsFact.typed_inst_id` for why a span is not.
+    typed_inst_id: InstId = .invalid,
     typed_span_id: SpanId = .invalid,
     // Only indirect-call argument facts use this second span identity. It
     // binds an argument occurrence to one exact callee occurrence.
