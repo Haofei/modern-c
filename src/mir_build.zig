@@ -890,7 +890,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
             .packed_bits_decl => |packed_bits_decl| {
                 const fields = try allocator.alloc(PackedBitsFieldFact, packed_bits_decl.fields.len);
                 errdefer allocator.free(fields);
-                for (packed_bits_decl.fields, 0..) |field, index| fields[index] = .{ .spelling = field.name.text };
+                for (packed_bits_decl.fields, 0..) |field, index| fields[index] = .{ .spelling = field.name.text, .bit_offset = index, .bit_width = 1 };
                 try packed_bits_facts.append(allocator, .{
                     .symbol_id = try internSymbolId(&symbol_ids, packed_bits_decl.name.text),
                     .source_id = typed_source_id,
@@ -1126,6 +1126,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                                 type_alias_facts.items,
                                 &symbol_ids,
                                 struct_facts.items,
+                                packed_bits_facts.items,
                                 enum_facts.items,
                                 &ast_structs,
                                 checked_globals.items,
@@ -1858,6 +1859,7 @@ fn buildGlobalAggregateInitializerPlan(
     type_aliases: []const TypeAliasFact,
     symbol_ids: *const std.StringHashMap(SymbolId),
     struct_facts: []const StructFact,
+    packed_bits_facts: []const PackedBitsFact,
     enum_facts: []const EnumFact,
     ast_structs: *const std.StringHashMap(ast.StructDecl),
     prior_globals: []const CheckedGlobalFact,
@@ -1887,7 +1889,7 @@ fn buildGlobalAggregateInitializerPlan(
         }
     }
     const ungrouped = switch (initializer.kind) {
-        .grouped => |inner| return buildGlobalAggregateInitializerPlan(allocator, inner.*, source_type, type_id, source_order, signature_types, type_aliases, symbol_ids, struct_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, owner_global_symbol_id, next_string_backing_ordinal, allow_leaf),
+        .grouped => |inner| return buildGlobalAggregateInitializerPlan(allocator, inner.*, source_type, type_id, source_order, signature_types, type_aliases, symbol_ids, struct_facts, packed_bits_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, owner_global_symbol_id, next_string_backing_ordinal, allow_leaf),
         else => initializer,
     };
     if (resolveStructFactForSignatureType(type_id, signature_types, type_aliases, symbol_ids, struct_facts)) |fact| {
@@ -1917,12 +1919,41 @@ fn buildGlobalAggregateInitializerPlan(
             const source_value = for (literal_fields) |candidate| {
                 if (std.mem.eql(u8, candidate.name.text, field_fact.spelling)) break candidate.value;
             } else return null;
-            const value = try buildGlobalAggregateInitializerPlan(allocator, source_value, source_field.ty, field_fact.type_id, source_order, signature_types, type_aliases, symbol_ids, struct_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, owner_global_symbol_id, next_string_backing_ordinal, true) orelse return null;
+            const value = try buildGlobalAggregateInitializerPlan(allocator, source_value, source_field.ty, field_fact.type_id, source_order, signature_types, type_aliases, symbol_ids, struct_facts, packed_bits_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, owner_global_symbol_id, next_string_backing_ordinal, true) orelse return null;
             fields[index] = .{ .field_index = @intCast(index), .value = value };
             fields_initialized += 1;
         }
         fields_transferred = true;
         return .{ .struct_ = .{ .struct_symbol_id = fact.symbol_id, .fields = fields } };
+    }
+    if (resolvePackedBitsFactForSignatureType(type_id, signature_types, type_aliases, symbol_ids, packed_bits_facts)) |fact| {
+        // A packed-bits literal names every field once; each leaf is a
+        // boolean literal. The plan keeps the field structure, and the
+        // backends fold it through the fact's bit layout.
+        const literal_fields = switch (ungrouped.kind) {
+            .struct_literal => |fields| fields,
+            else => return null,
+        };
+        if (literal_fields.len != fact.fields.len) return null;
+        for (literal_fields, 0..) |candidate, candidate_index| {
+            const is_known = for (fact.fields) |field_fact| {
+                if (std.mem.eql(u8, candidate.name.text, field_fact.spelling)) break true;
+            } else false;
+            if (!is_known) return null;
+            for (literal_fields[0..candidate_index]) |prior| if (std.mem.eql(u8, prior.name.text, candidate.name.text)) return null;
+        }
+        const fields = try allocator.alloc(mir_model.StructInitializerFieldPlan, fact.fields.len);
+        var fields_transferred = false;
+        defer if (!fields_transferred) allocator.free(fields);
+        for (fact.fields, 0..) |field_fact, index| {
+            const source_value = for (literal_fields) |candidate| {
+                if (std.mem.eql(u8, candidate.name.text, field_fact.spelling)) break candidate.value;
+            } else return null;
+            const set = packedBitsLiteralFieldValue(source_value) orelse return null;
+            fields[index] = .{ .field_index = @intCast(index), .value = .{ .scalar = .{ .boolean = set } } };
+        }
+        fields_transferred = true;
+        return .{ .packed_bits = .{ .packed_bits_symbol_id = fact.symbol_id, .fields = fields } };
     }
 
     const canonical_id = transparentSignatureTypeIdForBuild(type_id, signature_types, type_aliases, symbol_ids) orelse return null;
@@ -1950,7 +1981,7 @@ fn buildGlobalAggregateInitializerPlan(
                 plans.deinit(allocator);
             };
             for (items) |item| {
-                const child = (try buildGlobalAggregateInitializerPlan(allocator, item, element_source_type, array.child, source_order, signature_types, type_aliases, symbol_ids, struct_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, owner_global_symbol_id, next_string_backing_ordinal, true)) orelse break :blk null;
+                const child = (try buildGlobalAggregateInitializerPlan(allocator, item, element_source_type, array.child, source_order, signature_types, type_aliases, symbol_ids, struct_facts, packed_bits_facts, enum_facts, ast_structs, prior_globals, prior_initializer_facts, callables, const_fns, const_globals, reflect_env, owner_global_symbol_id, next_string_backing_ordinal, true)) orelse break :blk null;
                 var child_transferred = false;
                 errdefer if (!child_transferred) child.deinit(allocator);
                 try plans.append(allocator, child);
@@ -2054,6 +2085,46 @@ fn isDirectScalarIntegerName(name: []const u8) bool {
         std.mem.eql(u8, name, "i8") or std.mem.eql(u8, name, "i16") or
         std.mem.eql(u8, name, "i32") or std.mem.eql(u8, name, "i64") or
         std.mem.eql(u8, name, "i128") or std.mem.eql(u8, name, "isize");
+}
+
+/// A packed-bits field initializer is a boolean literal, possibly grouped.
+fn packedBitsLiteralFieldValue(expr: ast.Expr) ?bool {
+    return switch (expr.kind) {
+        .bool_literal => |value| value,
+        .grouped => |inner| packedBitsLiteralFieldValue(inner.*),
+        else => null,
+    };
+}
+
+/// Same walk as `resolveStructFactForSignatureType`, over the packed-bits
+/// table: a written name, through any alias chain, to a packed-bits fact.
+fn resolvePackedBitsFactForSignatureType(
+    initial_type_id: SignatureTypeId,
+    signature_types: *const SignatureTypeTableBuilder,
+    type_aliases: []const TypeAliasFact,
+    symbol_ids: *const std.StringHashMap(SymbolId),
+    packed_bits_facts: []const PackedBitsFact,
+) ?PackedBitsFact {
+    var current_type_id = initial_type_id;
+    var steps: usize = 0;
+    while (steps <= type_aliases.len) : (steps += 1) {
+        const name = switch (signature_types.get(current_type_id) orelse return null) {
+            .name => |value| value,
+            .qualified => |value| {
+                current_type_id = value.child;
+                continue;
+            },
+            else => return null,
+        };
+        const symbol_id = symbol_ids.get(name) orelse return null;
+        for (packed_bits_facts) |fact| if (fact.symbol_id.eql(symbol_id)) return fact;
+        for (type_aliases) |alias| {
+            if (!alias.symbol_id.eql(symbol_id)) continue;
+            current_type_id = alias.target_type_id;
+            break;
+        } else return null;
+    }
+    return null;
 }
 
 fn resolveStructFactForSignatureType(

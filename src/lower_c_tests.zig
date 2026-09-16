@@ -1192,6 +1192,48 @@ test "lower-c emits copied verified aggregate and relocation global plans withou
     try expectContains(output.items, "copied_ops = { .elems = { add, mul } };");
 }
 
+test "lower-c folds packed-bits global literals into the repr scalar" {
+    const source =
+        \\packed bits Flags: u8 {
+        \\    ready: bool,
+        \\    busy: bool,
+        \\    done: bool,
+        \\}
+        \\type FlagAlias = Flags;
+        \\global direct: Flags = .{ .ready = true, .busy = false, .done = true };
+        \\global aliased: FlagAlias = .{ .done = true, .ready = false, .busy = false };
+    ;
+    var parsed = try test_support.parseCheckedModule("c_packed_bits_global_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMirArtifacts(
+        std.testing.allocator,
+        &module_mir,
+        &output,
+        .kernel,
+        "c_packed_bits_global_plan.mc",
+        .{},
+        false,
+        null,
+    );
+    try expectContains(output.items, "Flags direct = ((Flags)5);");
+    try expectContains(output.items, "Flags aliased = ((Flags)4);");
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+    try temp.dir.writeFile(std.testing.io, .{ .sub_path = "packed_bits_global_plan.c", .data = output.items });
+    const generated_c = try temp.dir.realPathFileAlloc(std.testing.io, "packed_bits_global_plan.c", std.testing.allocator);
+    defer std.testing.allocator.free(generated_c);
+    const clang = try std.process.run(std.testing.allocator, std.testing.io, .{
+        .argv = &.{ "clang", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsyntax-only", generated_c },
+    });
+    defer std.testing.allocator.free(clang.stdout);
+    defer std.testing.allocator.free(clang.stderr);
+    try std.testing.expect(clang.term == .exited and clang.term.exited == 0);
+}
+
 test "lower-c emits decoded string-byte global plans without AST initializer artifacts" {
     const source =
         \\global greeting: cstr = "hi\n";

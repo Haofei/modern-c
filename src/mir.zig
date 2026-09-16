@@ -135,6 +135,7 @@ pub const TypeAliasFact = mir_model.TypeAliasFact;
 pub const EnumFact = mir_model.EnumFact;
 pub const EnumCaseFact = mir_model.EnumCaseFact;
 pub const PackedBitsFact = mir_model.PackedBitsFact;
+pub const PackedBitsInitializerPlan = mir_model.PackedBitsInitializerPlan;
 pub const PackedBitsFieldFact = mir_model.PackedBitsFieldFact;
 pub const OverlayUnionFact = mir_model.OverlayUnionFact;
 pub const OverlayUnionFieldFact = mir_model.OverlayUnionFieldFact;
@@ -206,6 +207,7 @@ pub fn resultConstructorFactInfo(kind: CallTargetKind) ?ResultConstructorFactInf
 }
 pub const SourcePoint = mir_model.SourcePoint;
 pub const transparentSignatureTypeId = mir_model.transparentSignatureTypeId;
+pub const packedBitsInitializerPlanValue = mir_model.packedBitsInitializerPlanValue;
 
 // MIR construction lives in `mir_build.zig`.
 const mir_build = @import("mir_build.zig");

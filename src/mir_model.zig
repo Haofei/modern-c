@@ -4225,10 +4225,13 @@ pub const EnumFact = struct {
 };
 
 /// One checked packed-bit field. Packed-bit fields are always boolean after
-/// semantic checking; only their spelling and declaration order remain
-/// relevant to code generation.
+/// semantic checking, one bit each in declaration order. The bit position is
+/// recorded here so a static initializer can be folded into the packed
+/// scalar from this table rather than from the declaration's syntax.
 pub const PackedBitsFieldFact = struct {
     spelling: []const u8,
+    bit_offset: usize,
+    bit_width: usize,
 };
 
 /// Syntax-free packed-bits declaration ingress. The representation and field
@@ -4437,6 +4440,35 @@ pub const GlobalAddressInitializerPlan = struct {
 /// symbol identity; admission proves that its checked callable signature is
 /// exactly the destination `fn(...) -> ...` shape before either backend emits
 /// a raw symbol reference.
+pub const PackedBitsInitializerPlan = struct {
+    packed_bits_symbol_id: SymbolId,
+    /// One entry per declared field, in declaration order; each value is a
+    /// `.scalar` boolean.
+    fields: []const StructInitializerFieldPlan,
+};
+
+/// Fold a packed-bits initializer plan into its repr scalar using the fact's
+/// bit layout. Null when the plan does not describe the fact: a field out of
+/// order or missing, a non-boolean leaf, or a field wider than one bit.
+pub fn packedBitsInitializerPlanValue(plan: PackedBitsInitializerPlan, fact: PackedBitsFact) ?u128 {
+    if (plan.fields.len != fact.fields.len) return null;
+    var value: u128 = 0;
+    for (plan.fields, 0..) |field, index| {
+        if (field.field_index != index) return null;
+        const layout = fact.fields[index];
+        if (layout.bit_width != 1 or layout.bit_offset >= 128) return null;
+        const set = switch (field.value) {
+            .scalar => |scalar| switch (scalar) {
+                .boolean => |set| set,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (set) value |= @as(u128, 1) << @intCast(layout.bit_offset);
+    }
+    return value;
+}
+
 pub const FunctionSymbolInitializerPlan = struct {
     target_symbol_id: SymbolId,
 };
@@ -4491,6 +4523,10 @@ pub const AggregateInitializerPlan = union(enum) {
         struct_symbol_id: SymbolId,
         fields: []const StructInitializerFieldPlan,
     },
+    /// A packed-bits literal with every field named and every leaf a boolean
+    /// scalar. Backends fold it into the repr scalar through the
+    /// PackedBitsFact bit layout; see `packedBitsInitializerPlanValue`.
+    packed_bits: PackedBitsInitializerPlan,
     zero,
     enum_case: EnumInitializerPlan,
     string_bytes: StringBytesInitializerPlan,
@@ -4504,6 +4540,10 @@ pub const AggregateInitializerPlan = union(enum) {
                 if (items.len != 0) allocator.free(items);
             },
             .struct_ => |plan| {
+                for (plan.fields) |field| field.value.deinit(allocator);
+                if (plan.fields.len != 0) allocator.free(plan.fields);
+            },
+            .packed_bits => |plan| {
                 for (plan.fields) |field| field.value.deinit(allocator);
                 if (plan.fields.len != 0) allocator.free(plan.fields);
             },
@@ -4554,6 +4594,12 @@ pub const AggregateInitializerPlan = union(enum) {
                 transferred = true;
                 break :blk .{ .struct_ = .{ .struct_symbol_id = value.struct_symbol_id, .fields = cloned } };
             },
+            // Every packed-bits leaf is a boolean scalar, so the field slice
+            // copies without recursion.
+            .packed_bits => |value| .{ .packed_bits = .{
+                .packed_bits_symbol_id = value.packed_bits_symbol_id,
+                .fields = try allocator.dupe(StructInitializerFieldPlan, value.fields),
+            } },
         };
     }
 };
@@ -4624,6 +4670,13 @@ pub fn aggregateInitializerPlanMatchesType(
         // sequence.  Do not reintroduce an AST-shaped struct description.
         .struct_ => |struct_plan| switch (shape) {
             .name => structInitializerPlanHasCanonicalFieldOrder(struct_plan),
+            .qualified => |node| aggregateInitializerPlanMatchesType(plan, types, node.child, callables, source_order),
+            else => false,
+        },
+        // Same policy as `.struct_`: the packed-bits identity and layout live
+        // in the module's PackedBitsFact table, checked by Module admission.
+        .packed_bits => switch (shape) {
+            .name => true,
             .qualified => |node| aggregateInitializerPlanMatchesType(plan, types, node.child, callables, source_order),
             else => false,
         },
@@ -4987,6 +5040,7 @@ fn aggregateInitializerPlanMatchesModule(plan: AggregateInitializerPlan, module:
             break :blk true;
         },
         .struct_ => |struct_plan| structInitializerPlanMatchesType(struct_plan, module, owner_global, type_id),
+        .packed_bits => |packed_plan| packedBitsInitializerPlanMatchesType(packed_plan, module, type_id),
         // Aggregate leaves never use implicit zeroing: a missing top-level
         // initializer has its own GlobalInitializerPlan.zero, while an
         // explicit `uninit` nested in a static aggregate is rejected by sema.
@@ -5028,6 +5082,17 @@ fn structInitializerPlanMatchesType(plan: anytype, module: Module, owner_global:
         if (!aggregateInitializerPlanMatchesModule(field.value, module, owner_global, expected.type_id)) return false;
     }
     return true;
+}
+
+fn packedBitsInitializerPlanMatchesType(plan: PackedBitsInitializerPlan, module: Module, type_id: SignatureTypeId) bool {
+    if (!plan.packed_bits_symbol_id.isValid()) return false;
+    const identity = if (plan.packed_bits_symbol_id.index() < module.symbol_identities.len) module.symbol_identities[plan.packed_bits_symbol_id.index()] else return false;
+    if (!identity.id.eql(plan.packed_bits_symbol_id) or identity.kind != .type_) return false;
+    if (!signatureTypeResolvesToSymbol(module, type_id, plan.packed_bits_symbol_id)) return false;
+    const fact = for (module.packed_bits) |candidate| {
+        if (candidate.symbol_id.eql(plan.packed_bits_symbol_id)) break candidate;
+    } else return false;
+    return packedBitsInitializerPlanValue(plan, fact) != null;
 }
 
 fn enumInitializerPlanMatchesType(plan: EnumInitializerPlan, module: Module, type_id: SignatureTypeId) bool {

@@ -459,6 +459,11 @@ const LlvmEmitter = struct {
                 try text.appendSlice(self.scratch.allocator(), " }");
                 break :blk try text.toOwnedSlice(self.scratch.allocator());
             },
+            .packed_bits => |packed_plan| blk: {
+                const fact = self.packedBitsFact(packed_plan.packed_bits_symbol_id) orelse return error.UnsupportedLlvmEmission;
+                const value = mir.packedBitsInitializerPlanValue(packed_plan, fact) orelse return error.UnsupportedLlvmEmission;
+                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
+            },
             .zero => "zeroinitializer",
             .enum_case => |value| blk: {
                 const enum_fact = self.enumFact(value.enum_symbol_id) orelse return error.UnsupportedLlvmEmission;
@@ -491,6 +496,11 @@ const LlvmEmitter = struct {
         };
         try out.appendSlice(self.scratch.allocator(), ")");
         return out.toOwnedSlice(self.scratch.allocator());
+    }
+
+    fn packedBitsFact(self: *const LlvmEmitter, symbol_id: mir.SymbolId) ?mir.PackedBitsFact {
+        for (self.mir_module.packed_bits) |fact| if (fact.symbol_id.eql(symbol_id)) return fact;
+        return null;
     }
 
     fn structFact(self: *const LlvmEmitter, symbol_id: mir.SymbolId) ?mir.StructFact {

@@ -3357,6 +3357,55 @@ test "range context facts recorded before their instruction take its identity" {
     try std.testing.expect(operand_fact);
 }
 
+test "MIR plans a packed-bits global literal through the packed-bits fact layout" {
+    const source =
+        \\packed bits Flags: u8 {
+        \\    ready: bool,
+        \\    busy: bool,
+        \\    done: bool,
+        \\}
+        \\type FlagAlias = Flags;
+        \\global direct: Flags = .{ .ready = true, .busy = false, .done = true };
+        \\global aliased: FlagAlias = .{ .done = true, .ready = false, .busy = false };
+    ;
+    var parsed = try test_support.parseCheckedModule("mir_packed_bits_global_plan.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer module_mir.deinit();
+    try mir.validateLoweringAdmission(module_mir);
+
+    try std.testing.expectEqual(@as(usize, 1), module_mir.packed_bits.len);
+    const fact = module_mir.packed_bits[0];
+    try std.testing.expectEqual(@as(usize, 3), fact.fields.len);
+    for (fact.fields, 0..) |field, index| {
+        try std.testing.expectEqual(index, field.bit_offset);
+        try std.testing.expectEqual(@as(usize, 1), field.bit_width);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), module_mir.global_initializer_facts.len);
+    const expected = [_]u128{ 0b101, 0b100 };
+    for (module_mir.global_initializer_facts, expected) |initializer, value| {
+        const packed_plan = switch (initializer.plan) {
+            .aggregate => |aggregate| switch (aggregate) {
+                .packed_bits => |plan| plan,
+                else => return error.TestUnexpectedResult,
+            },
+            else => return error.TestUnexpectedResult,
+        };
+        try std.testing.expect(packed_plan.packed_bits_symbol_id.eql(fact.symbol_id));
+        try std.testing.expectEqual(@as(usize, 3), packed_plan.fields.len);
+        try std.testing.expectEqual(value, mir.packedBitsInitializerPlanValue(packed_plan, fact).?);
+    }
+
+    // A leaf that is not a boolean does not describe the fact, and admission
+    // fails closed on it.
+    const mutable_fact = &module_mir.global_initializer_facts[0];
+    const mutable_fields = @constCast(mutable_fact.plan.aggregate.packed_bits.fields);
+    mutable_fields[1].value = .{ .scalar = .{ .uint = 1 } };
+    try std.testing.expect(mir.packedBitsInitializerPlanValue(mutable_fact.plan.aggregate.packed_bits, fact) == null);
+    try std.testing.expectError(error.InvalidMirGlobalInitializerFacts, mir.validateLoweringAdmission(module_mir));
+}
+
 test "MIR exposes generic typed span identity matching for codegen facts" {
     const source =
         \\extern fn close_a(value: u32) -> void;
