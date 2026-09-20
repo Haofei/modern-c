@@ -33,23 +33,18 @@ OUT_OF_SCOPE = {
     "error_from_malformed.mc": "pure compile_error fixture; malformed-decl check the chunk-level EXPECT_ERROR strip cannot isolate (phase=sema; E_INVALID_ERROR_FROM owned by spec_tests.zig)",
     "import_not_found_reject.mc": "pure import-loader diagnostic; top-level inline EXPECT_ERROR after the import semicolon cannot be chunk-isolated by the sweep (phase=parse; E_IMPORT_NOT_FOUND owned by spec_tests.zig)",
     "import_outside_sandbox_reject.mc": "pure import-loader diagnostic; top-level inline EXPECT_ERROR after the import semicolon cannot be chunk-isolated by the sweep (phase=parse; E_IMPORT_OUTSIDE_SANDBOX owned by spec_tests.zig)",
-    "monomorphization_limits.mc": "pure compile_error fixture; polymorphic-recursion limit check the chunk-level EXPECT_ERROR strip cannot isolate (phase=parse,sema; E_MONOMORPHIZATION_LIMIT owned by spec_tests.zig)",
-    "monomorphize_pattern_type_mentions.mc": "pure sema diagnostic; stripping the rejected generic body leaves its caller dangling (phase=parse,sema; E_NO_IMPLICIT_CONVERSION owned by spec_tests.zig)",
     "move_place.mc": "pure move-place sema fixture; stripping rejected move/index cases leaves checker-only indexed move-resource paths that are not a C-emission contract (phase=sema; E_USE_AFTER_MOVE/E_RESOURCE_* owned by spec_tests.zig)",
     "nesting_too_deep_reject.mc": "pure parser-depth diagnostic; top-level inline EXPECT_ERROR after the prototype semicolon cannot be chunk-isolated by the sweep (phase=parse; E_NESTING_TOO_DEEP owned by spec_tests.zig)",
     "private_import_reject.mc": "pure private-import diagnostic; stripping the rejected use leaves a relative support import outside the sweep temp sandbox (phase=sema; E_PRIVATE_IMPORT owned by spec_tests.zig)",
     "secret.mc": "checker-only Secret<T> hardening type has no C lowering (phase=sema; E_SECRET_* owned by spec_tests.zig)",
-    "rights_monotonic.mc": "opaque-rights hardening type has no C lowering (phase=sema; E_PRIVATE_FIELD owned by spec_tests.zig)",
     "soundness_use_after_move.mc": "accept/reject cases share move-typed defs the chunk-level EXPECT_ERROR strip cannot isolate (phase=sema; E_USE_AFTER_MOVE owned by spec_tests.zig)",
     "soundness_conservative_overrejection.mc": "shared move-typed defs across accept/reject (phase=sema; E_USE_AFTER_MOVE owned by spec_tests.zig)",
     "soundness_opaque_declassify.mc": "accept/reject cases share opaque defs (phase=sema; E_OPAQUE_DECLASSIFY owned by spec_tests.zig)",
     "soundness_guard_opaque_reject.mc": "opaque private-field reject fixture; positive impl cannot be chunk-isolated (phase=sema; E_PRIVATE_FIELD owned by spec_tests.zig)",
     "soundness_orphan_impl_reject.mc": "orphan-impl reject fixture (phase=sema; E_ORPHAN_IMPL owned by spec_tests.zig)",
-    "traits_effect_sleep_in_atomic.mc": "effect-typed callees are EXPECT_ERROR-stripped, leaving dangling refs (phase=parse,sema; E_SLEEP_IN_ATOMIC owned by spec_tests.zig)",
     "traits_orphan_opaque_reject.mc": "pure compile_error fixture; residue emits a `static main` the sweep's -Wmain rejects (phase=sema; E_ORPHAN_IMPL owned by spec_tests.zig)",
     "traits_orphan_nonopaque_reject.mc": "pure compile_error fixture with std import; residue cannot be chunk-isolated after EXPECT_ERROR stripping (phase=sema; E_ORPHAN_IMPL owned by spec_tests.zig)",
     "pointer_view_conversions.mc": "accept/reject pointer+view const-narrow cases share types the chunk-level EXPECT_ERROR strip cannot isolate (phase=sema; E_NO_IMPLICIT_POINTER_CONVERSION owned by spec_tests.zig; accept emit covered by tests/c_emit/pointer_views.mc + pointer_const_narrow.mc)",
-    "closure_typing.mc": "accept/reject closure typing cases share helper functions and globals; stripping rejected closure bodies leaves dangling references (phase=sema; E_CLOSURE_SIGNATURE_MISMATCH/E_LOCAL_ADDRESS_ESCAPE owned by spec_tests.zig; accept emit covered by tests/c_emit/global_closure.mc)",
     "reflection.mc": "reflection accept/reject cases include sema-only overflow layouts whose top-level declarations cannot be chunk-isolated by EXPECT_ERROR stripping (phase=parse,sema; E_REFLECTION_* owned by spec_tests.zig; accept emit covered by tests/c_emit/reflection.mc)",
 }
 
@@ -140,7 +135,7 @@ def main():
     fixtures = sorted(glob.glob(os.path.join(spec_dir, "*.mc")))
     expected = load_expected_failures()
     failures, oos_failures, swept, kept_fns = [], [], len(fixtures), 0
-    fixed = []
+    fixed, unlisted = [], []
     jobs = int(os.environ.get("JOBS") or (os.cpu_count() or 4))
     workers = max(1, min(jobs, len(fixtures))) if fixtures else 1
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
@@ -150,6 +145,12 @@ def main():
                 (oos_failures if name in OUT_OF_SCOPE else failures).append(failure)
             elif name in expected:
                 fixed.append(name)
+            elif name in OUT_OF_SCOPE:
+                # The allowlist gets the same discipline as the manifest: an
+                # entry that has started passing is standing debt that is no
+                # longer owed, and leaving it in place quietly excuses the
+                # fixture from the gate forever after.
+                unlisted.append(name)
     failures.sort()
     oos_failures.sort()
 
@@ -190,6 +191,11 @@ def main():
     if fixed:
         print(f"FAIL: {len(fixed)} fixture(s) listed as known-failing now emit; remove their entries from docs/backend-expected-failures.json:")
         for n in sorted(fixed):
+            print(f"  {n}")
+        status = 1
+    if unlisted:
+        print(f"FAIL: {len(unlisted)} allowlisted out-of-scope fixture(s) now emit; remove their OUT_OF_SCOPE entries:")
+        for n in sorted(unlisted):
             print(f"  {n}")
         status = 1
     if status != 0:

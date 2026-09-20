@@ -29,12 +29,6 @@
       "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_expression` in `possibly_racing_direct_address_deref_load` (declined by mir-build)."
     },
     {
-      "fixture": "generic_region_view_containers.mc",
-      "stage": "EMIT",
-      "reason": "E_UNKNOWN_TYPE",
-      "note": "Stripping the fixture's EXPECT_ERROR declarations removes a generic type the kept chunk still names, so the chunk does not resolve on its own."
-    },
-    {
       "fixture": "hosted_io.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",

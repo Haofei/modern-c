@@ -69,9 +69,84 @@ def is_rejected_chunk(chunk):
     return "EXPECT_ERROR" in chunk or "SWEEP_SKIP_DEPENDS_ON_REJECTED_DECL" in chunk
 
 
+# A top-level declaration's own name, by the keyword that introduces it.
+# Attributes, `pub`/`export` and the `region`/`view` struct modifiers may sit in
+# front, so the keyword is matched wherever it appears at the start of a line.
+_DECL_PREFIX = r"(?:pub\s+|export\s+|extern\s+|comptime\s+|region\s+|view\s+|const\s+)*"
+_DECLARES = re.compile(
+    r"(?m)^\s*" + _DECL_PREFIX + r"(?:fn|struct|enum|union|trait|global|type|module)\s+([A-Za-z_]\w*)"
+)
+# `const NAME: T = ...` and `global NAME: T = ...` bind a name without a
+# following keyword, so they need their own pattern.
+_DECLARES_VALUE = re.compile(r"(?m)^\s*(?:pub\s+|export\s+)*(?:const|global)\s+([A-Za-z_]\w*)\s*:")
+_IDENT = re.compile(r"[A-Za-z_]\w*")
+
+
+def _without_comments(chunk):
+    """The chunk's code with `//` and `/* */` removed, so prose that happens to
+    name a stripped declaration does not read as a reference to it."""
+    out, i, n = "", 0, len(chunk)
+    while i < n:
+        c, nxt = chunk[i], chunk[i + 1] if i + 1 < n else ""
+        if c == "/" and nxt == "/":
+            j = chunk.find("\n", i)
+            i = n if j == -1 else j
+            continue
+        if c == "/" and nxt == "*":
+            j = chunk.find("*/", i + 2)
+            i = n if j == -1 else j + 2
+            continue
+        out += c
+        i += 1
+    return out
+
+
+def declared_names(chunk):
+    code = _without_comments(chunk)
+    return set(_DECLARES.findall(code)) | set(_DECLARES_VALUE.findall(code))
+
+
+def referenced_names(chunk):
+    return set(_IDENT.findall(_without_comments(chunk))) - declared_names(chunk)
+
+
+def _keep_flags(chunks):
+    """Which chunks survive: the ones not rejected, minus the ones left naming
+    something only a rejected chunk defined.
+
+    A fixture pairs an EXPECT_ERROR declaration with accept cases that use it --
+    `struct RegionBox<T>` carries the expected error, and
+    `fn instantiate_region_box(b: *mut RegionBox<Node>)` uses it. Dropping only
+    the rejected chunk leaves the user dangling, and the sweep then reports
+    E_UNKNOWN_TYPE as though the backend could not emit something. Dropping the
+    dangling user too keeps the kept chunk a whole program. Transitive, because
+    a dropped user may itself be the only definition of something else.
+    """
+    keep = [not is_rejected_chunk(ch) for ch in chunks]
+    while True:
+        available = set()
+        for ch, k in zip(chunks, keep):
+            if k:
+                available |= declared_names(ch)
+        missing = set()
+        for ch, k in zip(chunks, keep):
+            if not k:
+                missing |= declared_names(ch) - available
+        if not missing:
+            return keep
+        dropped_any = False
+        for i, (ch, k) in enumerate(zip(chunks, keep)):
+            if k and referenced_names(ch) & missing:
+                keep[i] = False
+                dropped_any = True
+        if not dropped_any:
+            return keep
+
+
 def strip_expect_error(src):
     """Drop rejected declarations and declarations that depend on them."""
-    return "".join(ch for ch in split_top_level(src) if not is_rejected_chunk(ch))
+    chunks = split_top_level(src)
+    return "".join(ch for ch, k in zip(chunks, _keep_flags(chunks)) if k)
 
 
 def normalize_valid_chunk(chunk):
@@ -86,4 +161,7 @@ def normalize_valid_chunk(chunk):
 
 def valid_program(src):
     """The fixture's valid declarations only, with prototypes normalized (LLVM sweeps)."""
-    return "".join(normalize_valid_chunk(ch) for ch in split_top_level(src))
+    chunks = split_top_level(src)
+    return "".join(
+        normalize_valid_chunk(ch) if k else "" for ch, k in zip(chunks, _keep_flags(chunks))
+    )
