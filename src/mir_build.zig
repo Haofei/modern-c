@@ -11172,6 +11172,27 @@ pub const FunctionBuilder = struct {
         };
     }
 
+    /// Does control leave the function on this statement-expression?
+    ///
+    /// `unreachable` and `trap(...)` say so in their syntax. A call to a
+    /// `-> never` callable says so in its *signature*, which only the callable
+    /// table knows -- and the difference is a real CFG edge: a block that ends
+    /// in a diverging call has no successor, so nothing that happened on it
+    /// reaches the join. Leaving the edge in made ownership state from an
+    /// aborting branch flow into the fall-through path.
+    fn statementExpressionDiverges(self: *const FunctionBuilder, input: ast.Expr) bool {
+        if (exprTerminates(input)) return true;
+        var expr = input;
+        while (expr.kind == .grouped) expr = expr.kind.grouped.*;
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            else => return false,
+        };
+        const callee = directCalleeName(call.callee.*) orelse return false;
+        const summary = self.summaries.get(callee) orelse return false;
+        return summary.return_ty == .never;
+    }
+
     fn collectAddressTakenBlock(self: *FunctionBuilder, block: ast.Block) anyerror!void {
         for (block.items) |stmt| try self.collectAddressTakenStmt(stmt);
     }
@@ -11623,7 +11644,7 @@ pub const FunctionBuilder = struct {
                     self.finishExecutableTerminalTrap(trap);
                     return true;
                 }
-                if (exprTerminates(expr)) {
+                if (self.statementExpressionDiverges(expr)) {
                     self.setTerminator(.unreachable_);
                     return true;
                 }

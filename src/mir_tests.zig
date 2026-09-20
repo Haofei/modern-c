@@ -8497,6 +8497,75 @@ test "MIR ownership event admission rejects auto-drop without storage-dead" {
     try std.testing.expect(std.mem.indexOf(u8, verifier_reporter.diagnostics.items[0].message, "E_MIR_OWNERSHIP_EVENT") != null);
 }
 
+test "MIR ownership event admission rejects a double move across a join" {
+    // The CFG-aware check accepts a move on an arm that never rejoins. This
+    // is the shape that must stay rejected: the arm falls through, so at the
+    // join the handle is consumed down one edge and live down the other, and
+    // the second move has no single owner to take.
+    const source =
+        \\move struct Handle { v: u32 }
+        \\fn acquire() -> Handle { return .{ .v = 1 }; }
+        \\fn release(h: Handle) -> u32 {
+        \\    let v: u32 = h.v;
+        \\    unsafe { forget_unchecked(h); }
+        \\    return v;
+        \\}
+        \\fn double_move(cond: bool) -> u32 {
+        \\    let h: Handle = acquire();
+        \\    if cond {
+        \\        release(move h);
+        \\    }
+        \\    return release(move h);
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_double_move_across_join.mc", source);
+    defer parsed.deinit();
+
+    // MIR construction derives the ownership cleanup plan from these events,
+    // so the sequence is checked there: the module is refused outright rather
+    // than built and then declined.
+    try std.testing.expectError(
+        error.InvalidMirOwnershipEvents,
+        mir.buildFromDecls(std.testing.allocator, parsed.decls()),
+    );
+}
+
+test "MIR ownership event admission accepts a move on a diverging arm" {
+    // The companion to the double-move rejection above: the arm consumes the
+    // handle and then aborts through a `-> never` call, so it reaches no
+    // successor and the fall-through path still owns the handle.
+    const source =
+        \\move struct Handle { v: u32 }
+        \\fn acquire() -> Handle { return .{ .v = 1 }; }
+        \\fn release(h: Handle) -> u32 {
+        \\    let v: u32 = h.v;
+        \\    unsafe { forget_unchecked(h); }
+        \\    return v;
+        \\}
+        \\extern fn panicf() -> never;
+        \\fn consume_then_diverge(cond: bool) -> u32 {
+        \\    let h: Handle = acquire();
+        \\    if cond {
+        \\        release(move h);
+        \\        panicf();
+        \\    }
+        \\    return release(move h);
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_move_on_diverging_arm.mc", source);
+    defer parsed.deinit();
+
+    var built = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
+    defer built.deinit();
+
+    try mir.validateLoweringAdmission(built);
+
+    var verifier_reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_move_on_diverging_arm.mc", source);
+    defer verifier_reporter.deinit();
+    try mir.verifyBuiltMir(built, &verifier_reporter);
+    try std.testing.expect(!verifier_reporter.has_errors);
+}
+
 test "MIR records local reinit ownership events" {
     const source =
         \\fn reassign_local() -> u32 {

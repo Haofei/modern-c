@@ -35,12 +35,6 @@
       "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `unsupported_try` in `copy_one` (declined by mir-build)."
     },
     {
-      "fixture": "initialization.mc",
-      "stage": "EMIT",
-      "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_executable_shape` in `accept_defer_reads_var_assigned_after_defer` (declined by mir-build)."
-    },
-    {
       "fixture": "kernel_region_tokens.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
@@ -63,18 +57,6 @@
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
       "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_cleanup_action` in `accept_dynamic_multi_array_elem_assign_before_move` (declined by mir-build)."
-    },
-    {
-      "fixture": "move_cfg.mc",
-      "stage": "EMIT",
-      "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_executable_shape` in `accept_try_defer` (declined by mir-build)."
-    },
-    {
-      "fixture": "move_diverge.mc",
-      "stage": "EMIT",
-      "reason": "InvalidMirOwnershipEvents",
-      "note": "MIR ownership-event admission rejects the kept chunk's move/borrow sequence. Stripping the fixture's EXPECT_ERROR declarations can leave a move-typed definition whose consuming or auto-drop event no longer has its matching partner."
     },
     {
       "fixture": "serial_counter_ops.mc",

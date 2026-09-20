@@ -154,7 +154,7 @@ Total codes: **277**.
 | `E_MIR_ACCESS_FACT` | MIR verifier found duplicate resolved access fact<br>MIR verifier found index instruction without resolved access fact<br>MIR verifier found malformed resolved access fact | `src/mir_verify.zig:370`<br>`src/mir_verify.zig:383`<br>`src/mir_verify.zig:402` |
 | `E_MIR_CFG` | MIR verifier found malformed control-flow graph | `src/mir.zig:633` |
 | `E_MIR_IDENTITY` | MIR verifier found malformed instruction identity | `src/mir_verify.zig:356` |
-| `E_MIR_OWNERSHIP_EVENT` | MIR verifier found inconsistent ownership event sequence<br>MIR verifier found malformed ownership event | `src/mir_cleanup_cfg.zig:852`<br>`src/mir_cleanup_cfg.zig:859` |
+| `E_MIR_OWNERSHIP_EVENT` | MIR verifier found inconsistent ownership event sequence<br>MIR verifier found malformed ownership event | `src/mir_cleanup_cfg.zig:852`<br>`src/mir_cleanup_cfg.zig:863` |
 | `E_MIR_SOURCE_ID` | MIR verifier found malformed per-file source identity | `src/mir_verify.zig:344` |
 | `E_MIR_SYMBOL_ID` | MIR verifier found malformed symbol identity table | `src/mir_verify.zig:320` |
 | `E_MMIO_ACCESS_FORBIDDEN` | MIR verifier found MMIO register access disallowed by Reg/RegBits mode<br>MMIO register access mode does not allow read<br>MMIO register access mode does not allow write | `src/mir_verify.zig:199`<br>`src/sema.zig:5025`<br>`src/sema.zig:5035` |

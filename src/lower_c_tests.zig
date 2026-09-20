@@ -14385,7 +14385,7 @@ test "lower-c canonical ordinary defer with arguments ignores legacy argument fa
     try expectContains(output.items, "takes_u32(");
 }
 
-test "lower-c ordinary direct defer with discarded result requires MIR result fact" {
+test "lower-c renders a discarded-result defer from the typed body, not the legacy span" {
     const source =
         \\extern fn record(value: u32) -> u32;
         \\fn ordinary_defer_result_fact(x: u32) -> void {
@@ -14423,9 +14423,14 @@ test "lower-c ordinary direct defer with discarded result requires MIR result fa
     };
     if (!drifted_callee_span) return error.TestUnexpectedResult;
 
+    // A `defer` of a value-returning call is an ordinary cleanup action in
+    // the typed body -- the value is discarded exactly as it is for an
+    // expression statement -- so emission no longer consults the legacy
+    // stream's span at all, and drifting that span cannot decline it.
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_result_requires_fact.mc", .{}, false, null));
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_result_requires_fact.mc", .{}, false, null);
+    try expectContains(output.items, "record(");
 }
 
 test "lower-c ordinary call-target defer requires MIR call-target fact" {

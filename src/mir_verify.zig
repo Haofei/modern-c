@@ -1100,6 +1100,9 @@ pub const LoweringAdmissionError = error{
     StaleMirTargetTypeFacts,
     UnknownMirLoweringType,
     InvalidMirExecutableBody,
+    /// The ownership-event check solves a per-block dataflow over the CFG and
+    /// needs scratch storage proportional to the block count.
+    OutOfMemory,
 };
 
 /// Backends consume this single admission seam before lowering.  Conservative

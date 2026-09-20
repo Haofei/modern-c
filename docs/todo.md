@@ -81,7 +81,7 @@ backends off syntax, is described in
 | P1 | Give expressions a node identity that survives copying, or a per-instance span remap in monomorphization. | Unblocks monomorphizing after sema and stops instances failing closed in the resolved table. |
 | P1 | Bring the C backend's `ast_bridge` / `type_bridge` imports to zero, one file at a time. | The exceptions table in `src/architecture_boundary_tests.zig` is the countdown. LLVM is already at zero. |
 | P1 | Finish converting golden tests into fixtures: the MIR *dump* corpus is now `tests/mir/` (see `test-architecture.md`), but the `appendVerificationFactsFrom*` sites in `src/mir_tests.zig` are still in-Zig golden strings, as are the emitted-C goldens in `src/lower_c_tests.zig`. | The in-Zig golden strings are the largest consumer of the legacy instruction stream and the reason representation changes turn into mass test rewrites. |
-| P1 | Clear the remaining `docs/backend-expected-failures.json` entries or record a precise cause for each. | Each entry is a backend feature gap with a minimal reproduction. |
+| P1 | Clear the remaining `docs/backend-expected-failures.json` entries or record a precise cause for each. | Each entry is a backend feature gap with a minimal reproduction. The deref-of-a-call-result family is the largest one left; see the note below for what it actually needs. |
 | P2 | Split `src/mir_build.zig` by construct family and extract the shared AST-query surface still in `src/mir.zig`. | Readability. No behavior change. |
 | P2 | Audit `tools/` for scripts no gate runs; mark spec sections by maturity inline. | Hygiene. |
 
@@ -116,6 +116,32 @@ resolves, is single-valued, and is total on the statement-shaped instruction
 kinds. `ExecutableStatement.id` keeps its meaning as an array index -- it is
 what `owner_statement` points at -- so the two were not renumbered from one
 sequence. See [`typed-semantic-facts.md`](typed-semantic-facts.md#the-join-between-the-two-bodies).
+
+### Note: what deref-of-a-call-result needs
+
+`call(...).*` is the largest remaining `E_BACKEND_UNSUPPORTED` family in
+`backend-expected-failures.json` (`address_classes.mc`,
+`kernel_region_tokens.mc`, `lock_guards_data.mc`, and part of
+`data_race_semantics.mc`). Measured, not guessed:
+
+- Rooting the place at the call *value*, the way the index path does, is the
+  wrong shape. A guarded deref spells its place more than once, so the call
+  would be evaluated more than once. The place must be rooted at storage.
+- Binding the call result to a synthetic local first is the right shape: the
+  deref then has the ordinary `executableGuardedLocalScalarDerefPlace` form,
+  which already carries its representation check, its trap edge and its
+  renderer in both backends. That much works -- with it, the place stops being
+  `<unsupported-place>`.
+- What is left is the representation check. A single-pointer call result
+  already gets a `representation_check` *expression* wrapping the call, and
+  the deref's place then wants a second guard for the same pointer, while the
+  legacy stream emits only one `representation_check` instruction to own the
+  trap edge. The right answer is that the bound local is proven non-null by
+  the check at the call, so the place needs no guard of its own -- which means
+  teaching `root_nonnull_proven` a second way to be established.
+  `mir_executable_body.verifyCompletePlace` currently admits it only via
+  `executableLocalInitializedByOptionalPresentPayload`, so this is a new model
+  predicate plus its verifier rule, not a widening of an existing one.
 
 Not on the list: removing traits, closures, generics, or the advanced ownership
 forms. All were measured and none is a bounded cut. They stay frozen.

@@ -523,12 +523,12 @@ pub fn validateTypeOwnershipFactsForLowering(module: Module) error{InvalidMirTyp
     }
 }
 
-pub fn validateOwnershipEventsForLowering(module: Module) error{InvalidMirOwnershipEvents}!void {
+pub fn validateOwnershipEventsForLowering(module: Module) error{ InvalidMirOwnershipEvents, OutOfMemory }!void {
     for (module.functions) |function| {
         for (function.ownership_events) |event| {
             if (!ownershipEventValid(module, function, event)) return error.InvalidMirOwnershipEvents;
         }
-        if (!ownershipEventSequenceValid(function)) return error.InvalidMirOwnershipEvents;
+        if (!try ownershipEventSequenceValid(module.allocator, function)) return error.InvalidMirOwnershipEvents;
     }
 }
 
@@ -541,7 +541,7 @@ pub fn appendOwnershipCleanupPlan(
     for (function.ownership_events) |event| {
         if (!ownershipEventValid(module, function, event)) return error.InvalidMirOwnershipEvents;
     }
-    if (!ownershipEventSequenceValid(function)) return error.InvalidMirOwnershipEvents;
+    if (!try ownershipEventSequenceValid(allocator, function)) return error.InvalidMirOwnershipEvents;
 
     for (function.ownership_events, 0..) |event, index| {
         switch (event.kind) {
@@ -585,7 +585,7 @@ pub fn appendOwnershipCleanupCancellationPlan(
     for (function.ownership_events) |event| {
         if (!ownershipEventValid(module, function, event)) return error.InvalidMirOwnershipEvents;
     }
-    if (!ownershipEventSequenceValid(function)) return error.InvalidMirOwnershipEvents;
+    if (!try ownershipEventSequenceValid(allocator, function)) return error.InvalidMirOwnershipEvents;
 
     for (function.ownership_events, 0..) |event, index| {
         switch (event.kind) {
@@ -853,7 +853,11 @@ pub fn verifyFunctionOwnershipEvents(module: Module, function: Function, reporte
             .{},
         );
     }
-    if (!ownershipEventSequenceValid(function)) {
+    // The diagnostic verifier reports, it does not admit. An allocation
+    // failure here has no diagnostic to report, so it reports nothing and
+    // leaves the fail-closed answer to the lowering admission check.
+    const sequence_valid = ownershipEventSequenceValid(module.allocator, function) catch true;
+    if (!sequence_valid) {
         reporter.err(
             sourcePointSpan(function.ownership_events[function.ownership_events.len - 1].source),
             "E_MIR_OWNERSHIP_EVENT: MIR verifier found inconsistent ownership event sequence",
@@ -902,46 +906,233 @@ pub const OwnershipRootState = enum {
     consumed,
 };
 
-fn ownershipEventSequenceValid(function: Function) bool {
-    for (function.ownership_events, 0..) |event, index| {
-        const root = simpleOwnershipRootValue(event.place) orelse continue;
-        if (!event.place.root_type_symbol_id.isValid()) continue;
-        if (!ownershipRootHasStorageLive(function, root)) continue;
-        const state = ownershipRootStateBefore(function, index, root);
-        const generation = ownershipRootGenerationBefore(function, index, root);
-        switch (event.kind) {
-            .storage_live => {
-                if (state != .untracked) return false;
-                if (event.generation != 0) return false;
-            },
-            .init => {
-                if (state != .storage_live) return false;
-                if (event.generation != generation) return false;
-            },
-            .reinit => {
-                switch (state) {
-                    .storage_live => if (event.generation != generation) return false,
-                    .consumed => if (event.generation != generation + 1) return false,
-                    .live, .untracked => return false,
-                }
-            },
-            .move_out, .forget, .explicit_drop, .auto_drop => {
-                if (state != .live) return false;
-                if (event.generation != generation) return false;
-                if (event.kind == .auto_drop and autoDropClosingStorageDeadIndex(function, index, root) == null) return false;
-            },
-            .borrow_begin, .set_drop_flag => {
-                if (state != .live) return false;
-                if (event.generation != generation) return false;
-            },
-            .borrow_end => {},
-            .storage_dead => {
-                if (event.place.root_type_symbol_id.isValid() and state == .live) return false;
-                if (state != .untracked and event.generation != generation) return false;
-            },
+/// The set of ownership states a root may be in at a program point.
+///
+/// A single state is not enough once the check follows the CFG: at a join the
+/// root's state is whatever any predecessor left it in, and the whole point of
+/// the check is to tell apart the joins that agree from the ones that do not.
+/// `{live}` is "definitely still owned"; `{live, consumed}` is "moved on one
+/// path only", which is what makes a second move a double move.
+const OwnershipStateSet = struct {
+    bits: u4 = 0,
+
+    fn of(state: OwnershipRootState) OwnershipStateSet {
+        return .{ .bits = @as(u4, 1) << @intFromEnum(state) };
+    }
+
+    fn isEmpty(self: OwnershipStateSet) bool {
+        return self.bits == 0;
+    }
+
+    fn contains(self: OwnershipStateSet, state: OwnershipRootState) bool {
+        return self.bits & of(state).bits != 0;
+    }
+
+    fn only(self: OwnershipStateSet, state: OwnershipRootState) bool {
+        return self.bits == of(state).bits;
+    }
+
+    /// Every state in this set is one of the two named ones.
+    fn within(self: OwnershipStateSet, a: OwnershipRootState, b: OwnershipRootState) bool {
+        return !self.isEmpty() and self.bits & ~(of(a).bits | of(b).bits) == 0;
+    }
+
+    fn unionWith(self: OwnershipStateSet, other: OwnershipStateSet) OwnershipStateSet {
+        return .{ .bits = self.bits | other.bits };
+    }
+};
+
+/// One root's state on entry to, or exit from, a block.
+const OwnershipFlow = struct {
+    /// False until the dataflow proves control can reach this point.
+    reachable: bool = false,
+    states: OwnershipStateSet = .{},
+    generation: u32 = 0,
+    /// Predecessors agreed on the state but not on the generation, so the
+    /// generation is not a fact at this point and is not checked against.
+    generation_ambiguous: bool = false,
+
+    fn single(state: OwnershipRootState, generation: u32) OwnershipFlow {
+        return .{ .reachable = true, .states = OwnershipStateSet.of(state), .generation = generation };
+    }
+
+    fn join(self: OwnershipFlow, other: OwnershipFlow) OwnershipFlow {
+        if (!other.reachable) return self;
+        if (!self.reachable) return other;
+        return .{
+            .reachable = true,
+            .states = self.states.unionWith(other.states),
+            .generation = @max(self.generation, other.generation),
+            .generation_ambiguous = self.generation_ambiguous or other.generation_ambiguous or
+                self.generation != other.generation,
+        };
+    }
+
+    fn eql(self: OwnershipFlow, other: OwnershipFlow) bool {
+        return self.reachable == other.reachable and self.states.bits == other.states.bits and
+            self.generation == other.generation and self.generation_ambiguous == other.generation_ambiguous;
+    }
+};
+
+/// Are this function's ownership events a valid sequence along every path?
+///
+/// The events are recorded in one list, but they do not execute in list order:
+/// each carries the block it belongs to, and the blocks form a CFG. Reading
+/// the list linearly asks "what did the previous event leave behind", which is
+/// the wrong question at a branch -- it let a move on one arm be seen by the
+/// other arm, and rejected `move_diverge.mc`, where each arm moves once and
+/// the arms never meet.
+///
+/// So this walks the CFG instead: per-block entry state, events applied in
+/// order within a block, and a join at every merge point. The join is a set
+/// union, not a pick: a root that is `live` down one edge and `consumed` down
+/// another arrives at the join as both, and every operation that requires
+/// ownership rejects it. That is exactly a double move across a join, and it
+/// stays rejected -- what stops being rejected is an arm that never reaches
+/// the join at all.
+fn ownershipEventSequenceValid(allocator: std.mem.Allocator, function: Function) error{OutOfMemory}!bool {
+    if (function.blocks.len != 0) {
+        const entry = try allocator.alloc(OwnershipFlow, function.blocks.len);
+        defer allocator.free(entry);
+        var seen: std.ArrayList(ValueId) = .empty;
+        defer seen.deinit(allocator);
+        for (function.ownership_events) |event| {
+            const root = simpleOwnershipRootValue(event.place) orelse continue;
+            if (!event.place.root_type_symbol_id.isValid()) continue;
+            if (!ownershipRootHasStorageLive(function, root)) continue;
+            var already = false;
+            for (seen.items) |candidate| {
+                if (candidate.eql(root)) already = true;
+            }
+            if (already) continue;
+            try seen.append(allocator, root);
+            solveOwnershipRootEntryStates(function, root, entry);
+            if (!ownershipRootFlowValid(function, root, entry)) return false;
         }
     }
     if (!typedOwnershipRootsClosed(function)) return false;
+    return true;
+}
+
+/// Fixpoint over the CFG: `entry[b]` is the join of every predecessor's exit
+/// state for `root`. The lattice is a four-element set plus a reachability
+/// bit, so it has no ascending chain longer than the block count; the round
+/// bound is a guard, not the termination argument.
+fn solveOwnershipRootEntryStates(function: Function, root: ValueId, entry: []OwnershipFlow) void {
+    for (entry) |*flow| flow.* = .{};
+    entry[0] = OwnershipFlow.single(.untracked, 0);
+    var rounds: usize = 0;
+    while (rounds <= function.blocks.len) : (rounds += 1) {
+        var changed = false;
+        for (function.blocks, 0..) |block, index| {
+            if (!entry[index].reachable) continue;
+            const exit = applyOwnershipBlockEvents(function, root, BlockId.fromIndex(index), entry[index]);
+            for (block.successors) |successor| {
+                if (!successor.isValid() or successor.index() >= entry.len) continue;
+                const joined = entry[successor.index()].join(exit);
+                if (!joined.eql(entry[successor.index()])) {
+                    entry[successor.index()] = joined;
+                    changed = true;
+                }
+            }
+        }
+        if (!changed) break;
+    }
+}
+
+/// The state `root` is left in by the events `block` records, starting from
+/// `incoming`. This is the transfer function; it does not validate.
+fn applyOwnershipBlockEvents(
+    function: Function,
+    root: ValueId,
+    block: BlockId,
+    incoming: OwnershipFlow,
+) OwnershipFlow {
+    var flow = incoming;
+    for (function.ownership_events) |event| {
+        if (!ownershipEventTracksRoot(event, root)) continue;
+        if (!event.block_id.eql(block)) continue;
+        flow = applyOwnershipEvent(flow, event);
+    }
+    return flow;
+}
+
+fn applyOwnershipEvent(flow: OwnershipFlow, event: OwnershipEvent) OwnershipFlow {
+    return switch (event.kind) {
+        .storage_live => OwnershipFlow.single(.storage_live, event.generation),
+        .init, .reinit => OwnershipFlow.single(.live, event.generation),
+        .move_out, .forget, .explicit_drop, .auto_drop => OwnershipFlow.single(.consumed, event.generation),
+        .storage_dead => OwnershipFlow.single(.untracked, event.generation),
+        .borrow_begin, .borrow_end, .set_drop_flag => flow,
+    };
+}
+
+fn ownershipEventTracksRoot(event: OwnershipEvent, root: ValueId) bool {
+    const event_root = simpleOwnershipRootValue(event.place) orelse return false;
+    if (!event.place.root_type_symbol_id.isValid()) return false;
+    return event_root.eql(root);
+}
+
+/// Validate every event for `root`, block by block, from the solved entry
+/// states. A block the dataflow never reached holds no executable event, so it
+/// has nothing to validate.
+fn ownershipRootFlowValid(function: Function, root: ValueId, entry: []const OwnershipFlow) bool {
+    for (function.blocks, 0..) |_, index| {
+        if (!entry[index].reachable) continue;
+        var flow = entry[index];
+        for (function.ownership_events, 0..) |event, event_index| {
+            if (!ownershipEventTracksRoot(event, root)) continue;
+            if (!event.block_id.isValid() or event.block_id.index() != index) continue;
+            if (!ownershipEventValidInFlow(function, event, event_index, root, flow)) return false;
+            flow = applyOwnershipEvent(flow, event);
+        }
+    }
+    return true;
+}
+
+fn ownershipEventValidInFlow(
+    function: Function,
+    event: OwnershipEvent,
+    event_index: usize,
+    root: ValueId,
+    flow: OwnershipFlow,
+) bool {
+    const exact_generation = !flow.generation_ambiguous;
+    switch (event.kind) {
+        .storage_live => {
+            // Entering a slot's storage is an error only if the previous
+            // generation is still owned -- that would lose it. A loop body
+            // whose back edge left the slot consumed is re-entering the same
+            // slot, which the linear reading never saw at all.
+            if (flow.states.contains(.live)) return false;
+            if (event.generation != 0) return false;
+        },
+        .init => {
+            if (!flow.states.only(.storage_live)) return false;
+            if (exact_generation and event.generation != flow.generation) return false;
+        },
+        .reinit => {
+            // A slot may be re-initialized whether it was never owned yet or
+            // was consumed; a loop back edge legitimately merges both.
+            if (!flow.states.within(.storage_live, .consumed)) return false;
+            if (exact_generation and flow.states.only(.storage_live) and event.generation != flow.generation) return false;
+            if (exact_generation and flow.states.only(.consumed) and event.generation != flow.generation + 1) return false;
+        },
+        .move_out, .forget, .explicit_drop, .auto_drop => {
+            if (!flow.states.only(.live)) return false;
+            if (exact_generation and event.generation != flow.generation) return false;
+            if (event.kind == .auto_drop and autoDropClosingStorageDeadIndex(function, event_index, root) == null) return false;
+        },
+        .borrow_begin, .set_drop_flag => {
+            if (!flow.states.only(.live)) return false;
+            if (exact_generation and event.generation != flow.generation) return false;
+        },
+        .borrow_end => {},
+        .storage_dead => {
+            if (flow.states.contains(.live)) return false;
+            if (!flow.states.only(.untracked) and exact_generation and event.generation != flow.generation) return false;
+        },
+    }
     return true;
 }
 

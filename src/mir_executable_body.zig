@@ -225,7 +225,12 @@ pub fn verify(function: *const mir.Function) !void {
             const value = expression(body, root) orelse return error.InvalidExpressionReference;
             if (!value.owner_statement.eql(action.registration) or !value.block_id.eql(action.block_id))
                 return error.InvalidCleanupExpression;
-            if (body.complete and (value.result_ty != .void or value.operation != .direct_call))
+            // A `defer` statement evaluates its expression for effect, so a
+            // cleanup call that also returns a value is well formed: the
+            // value is discarded, exactly as it is for an expression
+            // statement. Requiring `void` here rejected `defer release(h)`
+            // for a `release` that reports something.
+            if (body.complete and value.operation != .direct_call)
                 return error.InvalidCleanupExpression;
         }
     }
