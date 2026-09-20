@@ -10970,6 +10970,20 @@ pub const FunctionBuilder = struct {
                     .{ .symbol = try self.internExecutableSymbol(ident.text) };
                 place.root_ty = root_ty;
                 place.root_type_id = try self.internTypeId(root_ty);
+                // A whole-variable place of aggregate type still has to be
+                // NAMED by a backend -- `&shadow` declares a pointer to
+                // `[256]u8`. A field projection interned its aggregate on the
+                // way through; a bare root never did, so the layout table had
+                // no row for it and the renderer had no type to print.
+                // Best-effort: a type that cannot be interned simply leaves no
+                // row, exactly as before.
+                switch (root_ty) {
+                    .array, .struct_, .tagged_union, .nullable_value => {
+                        if (self.local_type_exprs.get(ident.text) orelse self.global_type_exprs.get(ident.text)) |declared|
+                            _ = self.internExecutableTypeExpr(root_ty, declared) catch false;
+                    },
+                    else => {},
+                }
                 if (place.root == .local and root_ty == .pointer) {
                     place.root_initialization = self.executableLocalPointerInitialization(
                         place.root.local,

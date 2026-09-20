@@ -3717,6 +3717,11 @@ fn addressOfSupported(
     const place = placeById(body, address.place) orelse return false;
     if (place.storage != .ordinary) return false;
     if (!addressResultMatchesPlace(expression.result_ty, place.ty)) return false;
+    // The prologue declares this expression's temporary as a pointer to the
+    // place's type, so the renderer must be able to name that type. Without
+    // this the gate admits bodies the renderer then dies on -- an internal
+    // failure with a stack trace instead of a diagnostic.
+    if (!supportsType(body, place.ty)) return false;
     if (mir.executableFixedArrayIndexPlace(body, place.*)) |indexed| {
         if (!fixedArrayAddressablePlaceSupported(body, place.*)) return false;
         if (indexed.indirectPointee() != address.representation_span_id.isValid())

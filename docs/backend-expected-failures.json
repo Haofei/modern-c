@@ -77,12 +77,6 @@
       "note": "MIR ownership-event admission rejects the kept chunk's move/borrow sequence. Stripping the fixture's EXPECT_ERROR declarations can leave a move-typed definition whose consuming or auto-drop event no longer has its matching partner."
     },
     {
-      "fixture": "sanitizer_hook_override.mc",
-      "stage": "EMIT",
-      "reason": "InternalLoweringFailure",
-      "note": "The C lowering path reports an internal failure for the kept chunk; the construct has not been identified."
-    },
-    {
       "fixture": "serial_counter_ops.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
