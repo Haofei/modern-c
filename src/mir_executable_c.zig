@@ -3281,35 +3281,71 @@ fn castSupported(
     return cast.kind == expected;
 }
 
+/// A whole-value read of a global with no projection: the place is the global
+/// itself. Used for pointer-typed globals, which render as the symbol.
+fn globalScalarLoadPlace(body: *const mir.ExecutableBody, place: mir.ExecutablePlace) bool {
+    if (place.storage != .ordinary or place.projection_count != 0) return false;
+    return switch (place.root) {
+        .symbol => |id| if (symbolById(body, id)) |symbol| symbol.kind == .global else false,
+        .local, .value => false,
+    };
+}
+
+fn nullablePointerGlobalLoadSupported(
+    body: *const mir.ExecutableBody,
+    expression: mir.ExecutableExpression,
+    load: @FieldType(mir.ExecutableExpression.Operation, "load"),
+) bool {
+    if (load.access.kind != .race_unordered or
+        load.representation_span_id.isValid() or ownedTrapEdgeCount(body, expression.id) != 0)
+        return false;
+    const place = placeById(body, load.place) orelse return false;
+    if (place.storage != .ordinary or place.projection_count != 0 or
+        load.access.alignment != mir.ExecutableMemoryAccess.scalarAlignment(expression.result_ty)) return false;
+    return switch (place.root) {
+        .symbol => |id| if (symbolById(body, id)) |symbol|
+            symbol.kind == .global and symbol.mutable and sameValueType(place.ty, expression.result_ty)
+        else
+            false,
+        .local, .value => false,
+    };
+}
+
 fn memoryLoadSupported(
     body: *const mir.ExecutableBody,
     expression: mir.ExecutableExpression,
     load: @FieldType(mir.ExecutableExpression.Operation, "load"),
 ) bool {
-    if (expression.result_ty == .nullable_pointer) {
-        if (load.access.kind != .race_unordered or
-            load.representation_span_id.isValid() or ownedTrapEdgeCount(body, expression.id) != 0)
-            return false;
-        const place = placeById(body, load.place) orelse return false;
-        if (place.storage != .ordinary or place.projection_count != 0 or
-            load.access.alignment != mir.ExecutableMemoryAccess.scalarAlignment(expression.result_ty)) return false;
-        return switch (place.root) {
-            .symbol => |id| if (symbolById(body, id)) |symbol|
-                symbol.kind == .global and symbol.mutable and sameValueType(place.ty, expression.result_ty)
-            else
-                false,
-            .local, .value => false,
-        };
-    }
+    // A whole, unprojected, race-unordered read of a mutable nullable-pointer
+    // global is accepted outright: it carries no trap edge and no
+    // representation check, so none of the general rules below apply to it.
+    // This is an accept-only fast path -- anything it does not recognize falls
+    // through to the general rules rather than being refused, which is what
+    // an indexed read like `maybe_ptrs[1]` needs.
+    if (expression.result_ty == .nullable_pointer and
+        nullablePointerGlobalLoadSupported(body, expression, load)) return true;
     const aggregate_copy = mir.executableAggregateCopyAlignment(expression.result_ty) != null;
     const callable = callableLoadTargetSupported(body, expression, load);
     const dyn_value = dynLoadTargetSupported(body, expression, load);
     const slice_value = sliceLoadTargetSupported(body, expression, load);
     const place = placeById(body, load.place) orelse return false;
-    const pointer_value = expression.result_ty == .pointer and sameValueType(place.ty, expression.result_ty) and
+    // A nullable pointer is a thin pointer with a null niche: it reads through
+    // exactly the same places a plain pointer does.
+    const pointer_like = expression.result_ty == .pointer or expression.result_ty == .nullable_pointer;
+    const pointer_value = pointer_like and sameValueType(place.ty, expression.result_ty) and
         place.type_id.eql(expression.type_id) and
         (mir.executableAggregatePointerFieldDerefPlace(body, place.*, false) != null or
-            mir.executableParameterProjectedPlace(body, place.*, false));
+            mir.executableParameterProjectedPlace(body, place.*, false) or
+            // A pointer-typed global read whole: `return message;` where
+            // `message: *const u8`. The nullable-pointer branch above already
+            // accepts this shape; the plain-pointer path had not.
+            globalScalarLoadPlace(body, place.*) or
+            // An element of a fixed array of pointers is a pointer value like
+            // any other. This is the same place shape `canEmitBody` already
+            // accepts for reading a scalar element; only the pointer-typed
+            // load had been left out, so `names[1]` on a `[2]*const u8` global
+            // was declined while `xs[1]` on a `[2]u32` global was not.
+            mir.executableFixedArrayIndexPlace(body, place.*) != null);
     if (!aggregate_copy and scalarMemoryInfo(expression.result_ty) == null and enumTypeForValueType(body, expression.result_ty) == null and
         !callable and !dyn_value and !slice_value and !pointer_value) return false;
     if (load.access.alignment != mir.executableMemoryAlignment(body.enum_types, expression.result_ty)) return false;
@@ -5556,8 +5592,18 @@ fn arrayElementTypeSupported(body: *const mir.ExecutableBody, ty: mir.ValueType,
         return ty == .value and trait.kind == .trait and isSafeIdentifier(trait.spelling);
     }
     return switch (ty) {
-        .bool, .address => true,
+        .bool, .address, .cstr => true,
         .integer, .float => |name| primitiveType(name) != null,
+        .domain_integer => |shape| primitiveType(shape.child) != null,
+        // A thin pointer is as renderable as an element type as it is as an
+        // expression type; the two rules had drifted apart, so an array of
+        // pointers was not a type this renderer would touch and reading one
+        // element out of `[2]*const u8` was declined. The slice kinds stay
+        // out: those are fat pointers with their own aggregate rendering.
+        .pointer => |shape| shape.kind != .slice and
+            (primitiveType(shape.child) != null or isSafeIdentifier(shape.child)),
+        .nullable_pointer => |shape| shape.kind != .slice and
+            (primitiveType(shape.child) != null or isSafeIdentifier(shape.child)),
         .struct_, .closed_enum, .open_enum => |name| isSafeIdentifier(name),
         .array => if (aggregateTypeForValueType(body, ty)) |shape|
             shape.array_length != null and shape.array_length.? != 0 and shape.field_count != 0 and
