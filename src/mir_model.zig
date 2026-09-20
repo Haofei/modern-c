@@ -2288,6 +2288,38 @@ pub const ExecutableIncompleteReason = enum {
     unsupported_await,
     unsupported_opaque_asm,
     compile_time_statement,
+    // The body was rejected by a structural coherence check rather than by an
+    // unsupported construct: some identity, type or alignment did not line up.
+    // Recorded per phase so an incomplete body always says which pass refused
+    // it; `none` on an incomplete body is itself a verifier failure.
+    incoherent_parameter,
+    incoherent_expression,
+    incoherent_place,
+    incoherent_statement,
+    incoherent_cleanup_action,
+    incoherent_terminator,
+    incoherent_executable_shape,
+    /// Ownership drop glue is still outside the canonical body boundary, so a
+    /// function that needs it is refused here rather than half-rendered.
+    unsupported_ownership_cleanup,
+
+    /// Whether this reason came from a structural coherence check rather than
+    /// from a construct the builder cannot represent. Structural rejections
+    /// are conservative and may be overridden by a successful executable-body
+    /// verification; an unsupported construct never is.
+    pub fn isStructural(self: ExecutableIncompleteReason) bool {
+        return switch (self) {
+            .incoherent_parameter,
+            .incoherent_expression,
+            .incoherent_place,
+            .incoherent_statement,
+            .incoherent_cleanup_action,
+            .incoherent_terminator,
+            .incoherent_executable_shape,
+            => true,
+            else => false,
+        };
+    }
 };
 
 pub const ExecutableBody = struct {

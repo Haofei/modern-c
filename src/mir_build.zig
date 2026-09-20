@@ -2700,6 +2700,8 @@ fn attachFunctionCleanupCfgs(allocator: std.mem.Allocator, module: *Module) erro
             (cleanupCfgHasActions(function.cleanup_cfg) and function.executable_body.cleanup_actions.len == 0))
         {
             function.executable_body.complete = false;
+            if (function.executable_body.incomplete_reason == .none)
+                function.executable_body.incomplete_reason = .unsupported_ownership_cleanup;
         }
     }
 }
@@ -5693,13 +5695,33 @@ pub const FunctionBuilder = struct {
                 result.executable_body.complete = false;
             };
         }
+        // The structural coherence checks are conservative: a false negative
+        // there must not permanently strand a body the executable verifier is
+        // happy with. That rescue used to key on the absence of a reason; now
+        // that every check records one, it keys on the reason being structural
+        // rather than an unsupported construct, which stays fail-closed.
         if (!result.executable_body.complete and
-            result.executable_body.incomplete_reason == .none)
+            (result.executable_body.incomplete_reason == .none or
+                result.executable_body.incomplete_reason.isStructural()))
         {
+            // A rescued body must not keep the reason it was rejected for:
+            // `mir_executable_body.verify` rejects a complete body that still
+            // carries one, so restore it only if the rescue fails.
+            const refused_for = result.executable_body.incomplete_reason;
             result.executable_body.complete = true;
+            result.executable_body.incomplete_reason = .none;
             mir_executable_body.verify(&result) catch {
                 result.executable_body.complete = false;
+                result.executable_body.incomplete_reason = refused_for;
             };
+        }
+        // A body that is still incomplete after that always says why. Not
+        // every site that clears `executable_supported` records a reason, so
+        // name the phase here rather than leaving an unexplained refusal for a
+        // backend to report as "does not yet support this construct" with
+        // nothing further. `validateLoweringAdmission` enforces the invariant.
+        if (!result.executable_body.complete and result.executable_body.incomplete_reason == .none) {
+            result.executable_body.incomplete_reason = .incoherent_executable_shape;
         }
         return result;
     }
@@ -5734,37 +5756,37 @@ pub const FunctionBuilder = struct {
         var complete = self.executable_supported and self.ownership_cleanup_locals.items.len == 0;
         for (self.executable_parameters.items) |*parameter| {
             parameter.type_id = self.type_ids.get(parameter.ty) orelse .invalid;
-            if (!parameter.span_id.isValid() or !parameter.type_id.isValid()) complete = false;
+            if (!parameter.span_id.isValid() or !parameter.type_id.isValid()) self.markExecutableIncomplete(&complete, .incoherent_parameter);
         }
         for (self.executable_expressions.items) |*expression| {
             expression.type_id = self.type_ids.get(expression.result_ty) orelse .invalid;
             switch (expression.operation) {
                 .direct_call => |call| {
-                    if (!call.callee_span_id.isValid()) complete = false;
+                    if (!call.callee_span_id.isValid()) self.markExecutableIncomplete(&complete, .incoherent_expression);
                 },
                 .builtin_call => |*call| {
-                    if (!call.callee_span_id.isValid()) complete = false;
+                    if (!call.callee_span_id.isValid()) self.markExecutableIncomplete(&complete, .incoherent_expression);
                 },
                 else => {},
             }
             if (!expression.span_id.isValid() or !expression.type_id.isValid() or
-                !executableExpressionComplete(self, expression.*, contract_regions, range_facts)) complete = false;
+                !executableExpressionComplete(self, expression.*, contract_regions, range_facts)) self.markExecutableIncomplete(&complete, .incoherent_expression);
         }
         for (self.executable_places.items) |*place| {
             place.root_type_id = self.type_ids.get(place.root_ty) orelse .invalid;
             place.type_id = self.type_ids.get(place.ty) orelse .invalid;
             if (!place.span_id.isValid() or !place.root_type_id.isValid() or !place.type_id.isValid() or
-                place.projection_count >= mir_model.max_executable_projections or !self.executablePlaceComplete(place.*)) complete = false;
+                place.projection_count >= mir_model.max_executable_projections or !self.executablePlaceComplete(place.*)) self.markExecutableIncomplete(&complete, .incoherent_place);
         }
         for (self.executable_statements.items) |*statement| {
-            if (!statement.span_id.isValid()) complete = false;
+            if (!statement.span_id.isValid()) self.markExecutableIncomplete(&complete, .incoherent_statement);
             switch (statement.operation) {
                 .local_init => |*local| {
                     local.type_id = self.type_ids.get(local.ty) orelse .invalid;
-                    if (!local.type_id.isValid()) complete = false;
+                    if (!local.type_id.isValid()) self.markExecutableIncomplete(&complete, .incoherent_statement);
                     if (local.value) |value_id| {
                         const value = self.executable_expressions.items[value_id.index()];
-                        if (!sameValueType(value.result_ty, local.ty)) complete = false;
+                        if (!sameValueType(value.result_ty, local.ty)) self.markExecutableIncomplete(&complete, .incoherent_statement);
                     }
                 },
                 .store => |*store| {
@@ -5773,20 +5795,20 @@ pub const FunctionBuilder = struct {
                         !store.place.isValid() or store.place.index() >= self.executable_places.items.len or
                         !self.executableMemoryAccessComplete(self.executable_places.items[store.place.index()], store.ty, store.access, true))
                     {
-                        complete = false;
+                        self.markExecutableIncomplete(&complete, .incoherent_statement);
                     } else {
                         const guarded = self.executablePlaceNeedsRepresentationGuard(self.executable_places.items[store.place.index()]);
-                        if (guarded != store.representation_span_id.isValid()) complete = false;
+                        if (guarded != store.representation_span_id.isValid()) self.markExecutableIncomplete(&complete, .incoherent_statement);
                         const value = self.executable_expressions.items[store.value.index()];
-                        if (!sameValueType(value.result_ty, store.ty)) complete = false;
+                        if (!sameValueType(value.result_ty, store.ty)) self.markExecutableIncomplete(&complete, .incoherent_statement);
                     }
-                    if (store.access.alignment == 0) complete = false;
+                    if (store.access.alignment == 0) self.markExecutableIncomplete(&complete, .incoherent_statement);
                 },
                 .packed_field_store => |store| {
                     if (!store.place.isValid() or store.place.index() >= self.executable_places.items.len or
                         !store.value.isValid() or store.value.index() >= self.executable_expressions.items.len)
                     {
-                        complete = false;
+                        self.markExecutableIncomplete(&complete, .incoherent_statement);
                     } else {
                         const place = self.executable_places.items[store.place.index()];
                         const value = self.executable_expressions.items[store.value.index()];
@@ -5795,47 +5817,47 @@ pub const FunctionBuilder = struct {
                             !sameValueType(aggregate.?.ty, place.ty) or store.field_index >= aggregate.?.field_count or
                             aggregate.?.field_types[store.field_index] != .bool or value.result_ty != .bool or
                             store.access.alignment != mir_model.executableMemoryAlignment(self.executable_enum_types.items, aggregate.?.storage_ty))
-                            complete = false;
+                            self.markExecutableIncomplete(&complete, .incoherent_statement);
                     }
                 },
                 .return_ => |maybe_value| if (maybe_value) |value_id| {
                     const value = self.executable_expressions.items[value_id.index()];
-                    if (!sameValueType(value.result_ty, self.return_ty)) complete = false;
+                    if (!sameValueType(value.result_ty, self.return_ty)) self.markExecutableIncomplete(&complete, .incoherent_statement);
                 } else if (self.return_ty != .void) {
-                    complete = false;
+                    self.markExecutableIncomplete(&complete, .incoherent_statement);
                 },
                 .guard => |guard| if (guard.kind == .assert_ and
                     !self.executableAssertGuardComplete(statement.*, guard))
                 {
-                    complete = false;
+                    self.markExecutableIncomplete(&complete, .incoherent_statement);
                 },
                 .opaque_asm => |asm_value| {
                     if (asm_value.template_count > mir_model.max_executable_operands or
                         asm_value.clobber_count > mir_model.max_executable_operands)
-                        complete = false;
+                        self.markExecutableIncomplete(&complete, .incoherent_statement);
                 },
                 .precise_asm => |*asm_value| {
                     if (asm_value.template_count > mir_model.max_executable_operands or
                         asm_value.clobber_count > mir_model.max_executable_operands or
                         asm_value.output_count > mir_model.max_executable_operands or
                         asm_value.input_count > mir_model.max_executable_operands)
-                        complete = false;
+                        self.markExecutableIncomplete(&complete, .incoherent_statement);
                     for (asm_value.outputs[0..asm_value.output_count]) |*output| {
                         output.type_id = self.type_ids.get(output.ty) orelse .invalid;
-                        if (!output.type_id.isValid()) complete = false;
+                        if (!output.type_id.isValid()) self.markExecutableIncomplete(&complete, .incoherent_statement);
                     }
                     for (asm_value.inputs[0..asm_value.input_count]) |*input| {
                         input.type_id = self.type_ids.get(input.ty) orelse .invalid;
-                        if (!input.type_id.isValid()) complete = false;
+                        if (!input.type_id.isValid()) self.markExecutableIncomplete(&complete, .incoherent_statement);
                     }
                 },
-                .unsupported => complete = false,
+                .unsupported => self.markExecutableIncomplete(&complete, .incoherent_statement),
                 .defer_register, .cleanup_run => {},
                 else => {},
             }
         }
         for (self.executable_cleanup_actions.items) |*action| {
-            if (!action.span_id.isValid() or action.roots.len == 0) complete = false;
+            if (!action.span_id.isValid() or action.roots.len == 0) self.markExecutableIncomplete(&complete, .incoherent_cleanup_action);
         }
         // Representation facts are recorded by the source-shaped walk after
         // recursively visiting some assignment/call operands. Resolve any
@@ -5843,7 +5865,7 @@ pub const FunctionBuilder = struct {
         // The typed block/span identity must select exactly one operation;
         // zero or multiple candidates remain fail-closed.
         try self.resolveExecutableRepresentationTrapEdges(trap_edges, call_target_facts, legacy_blocks);
-        if (!try self.executableTrapProjectionComplete(trap_edges, call_target_facts, legacy_blocks)) complete = false;
+        if (!try self.executableTrapProjectionComplete(trap_edges, call_target_facts, legacy_blocks)) self.markExecutableIncomplete(&complete, .incoherent_cleanup_action);
         for (self.blocks.items) |block| {
             const block_index = block.id.index();
             const operation: @FieldType(ExecutableTerminator, "operation") = if (self.executable_for_each_terminators.get(block_index)) |for_each|
@@ -5861,20 +5883,20 @@ pub const FunctionBuilder = struct {
                     {
                         break :fallthrough .unreachable_;
                     }
-                    complete = false;
+                    self.markExecutableIncomplete(&complete, .incoherent_terminator);
                     break :fallthrough .fallthrough;
                 },
                 .jump => |target| .{ .jump = target },
                 .branch => |branch| branch_op: {
                     const condition = executableGuardForBlock(self.executable_statements.items, block.id) orelse {
-                        complete = false;
+                        self.markExecutableIncomplete(&complete, .incoherent_terminator);
                         break :branch_op .{ .branch = .{ .condition = .invalid, .true_block = branch.true_block, .false_block = branch.false_block } };
                     };
                     break :branch_op .{ .branch = .{ .condition = condition, .true_block = branch.true_block, .false_block = branch.false_block } };
                 },
                 .switch_ => switch_op: {
                     const subject = executableGuardForBlock(self.executable_statements.items, block.id) orelse {
-                        complete = false;
+                        self.markExecutableIncomplete(&complete, .incoherent_terminator);
                         break :switch_op .{ .switch_ = .{ .subject = .invalid } };
                     };
                     if (self.executableBooleanBranch(block)) |branch| {
@@ -5885,11 +5907,11 @@ pub const FunctionBuilder = struct {
                         } };
                     }
                     if (block_index >= legacy_blocks.len) {
-                        complete = false;
+                        self.markExecutableIncomplete(&complete, .incoherent_terminator);
                         break :switch_op .{ .switch_ = .{ .subject = subject } };
                     }
                     const switch_value = self.executableTypedSwitch(legacy_blocks[block_index], legacy_blocks, subject) orelse {
-                        complete = false;
+                        self.markExecutableIncomplete(&complete, .incoherent_terminator);
                         break :switch_op .{ .switch_ = .{ .subject = subject } };
                     };
                     break :switch_op .{ .switch_ = switch_value };
@@ -5897,7 +5919,7 @@ pub const FunctionBuilder = struct {
                 .return_ => .return_,
                 .trap_ => |kind| trap: {
                     const executable_kind = self.executableTrapKindForBlock(block.id, kind, trap_edges, call_target_facts) orelse {
-                        complete = false;
+                        self.markExecutableIncomplete(&complete, .incoherent_terminator);
                         break :trap .{ .trap_ = kind };
                     };
                     break :trap .{ .trap_ = executable_kind };
@@ -6380,6 +6402,21 @@ pub const FunctionBuilder = struct {
             .statement => {},
         };
         return owned == 1;
+    }
+
+    /// Mark the executable body incomplete and say which pass refused it.
+    ///
+    /// Every structural coherence check goes through here, so an incomplete
+    /// body always carries a reason. A body that is incomplete with reason
+    /// `none` means a check forgot to say why, and the verifier treats that as
+    /// a failure rather than letting the backend decline it silently.
+    fn markExecutableIncomplete(
+        self: *FunctionBuilder,
+        complete: *bool,
+        reason: mir_model.ExecutableIncompleteReason,
+    ) void {
+        complete.* = false;
+        if (self.executable_incomplete_reason == .none) self.executable_incomplete_reason = reason;
     }
 
     fn unsupportedExecutableExpression(

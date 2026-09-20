@@ -425,9 +425,16 @@ test "single parameter pointer deref owns typed place and race access" {
     try std.testing.expect(!executable.isComplete(&module.functions[4]));
     for ([_]usize{4}) |index| {
         const store = &module.functions[index];
+        // A refused body now names the phase that refused it. Claiming the
+        // body is complete means dropping that reason too -- a complete body
+        // carrying one is its own error -- so clear it here and restore it,
+        // to keep this test about the completion claim it is named for.
+        const refused_for = store.executable_body.incomplete_reason;
         store.executable_body.complete = true;
+        store.executable_body.incomplete_reason = .none;
         try std.testing.expectError(error.InvalidCompletionClaim, executable.verify(store));
         store.executable_body.complete = false;
+        store.executable_body.incomplete_reason = refused_for;
         try executable.verify(store);
     }
 

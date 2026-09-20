@@ -1103,6 +1103,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateCallTargetFactsForLowering(module);
     try validateInstructionSpanIdentitiesForLowering(module);
     for (module.functions) |*function| mir_executable_body.verify(function) catch return error.InvalidMirExecutableBody;
+    try validateExecutableRefusalsNamed(module);
     try validateExecutableLocalFactsForLowering(module);
     try validateExecutableTypeFactsForLowering(module);
     try validateRepresentationFactsForLowering(module);
@@ -1134,6 +1135,30 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
 /// against the one authoritative SignatureTypeTable. Pattern/legacy locals
 /// may intentionally omit that optional shape; their ValueType/TypeId record
 /// remains sufficient for mechanical storage rendering.
+fn executableBodyIsEmpty(body: *const mir_model.ExecutableBody) bool {
+    return body.parameters.len == 0 and body.locals.len == 0 and body.symbols.len == 0 and
+        body.aggregate_types.len == 0 and body.enum_types.len == 0 and body.result_types.len == 0 and
+        body.tagged_union_types.len == 0 and body.expressions.len == 0 and body.places.len == 0 and
+        body.statements.len == 0 and body.terminators.len == 0;
+}
+
+/// A refused executable body says why it was refused.
+///
+/// An unexplained refusal reaches a user as "the C backend does not yet
+/// support this construct" with no construct named, which is the one shape of
+/// report that cannot be acted on. The builder names every refusal; this is
+/// the admission boundary that keeps it that way.
+fn validateExecutableRefusalsNamed(module: Module) error{InvalidMirExecutableBody}!void {
+    for (module.functions) |function| {
+        if (function.executable_body.complete) continue;
+        // An extern declaration has no body to refuse, and a body with no
+        // content at all was never built rather than rejected -- the
+        // executable-body verifier returns early on exactly that shape.
+        if (function.is_extern or executableBodyIsEmpty(&function.executable_body)) continue;
+        if (function.executable_body.incomplete_reason == .none) return error.InvalidMirExecutableBody;
+    }
+}
+
 fn validateExecutableLocalFactsForLowering(module: Module) error{InvalidMirExecutableLocalFacts}!void {
     for (module.functions) |function| {
         const body = &function.executable_body;
