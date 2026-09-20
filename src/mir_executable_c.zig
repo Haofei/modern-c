@@ -311,8 +311,14 @@ fn emitStatement(
                             return;
                         }
                     }
+                    // A thin pointer is one machine word, so it stores the
+                    // way a callable or an enum does -- a single relaxed
+                    // atomic write of the whole value. It has no race helper
+                    // of its own, which is why it used to fall through to the
+                    // scalar branch and fail there as an unsupported type.
                     if ((store.ty == .value and mir.executableCallablePlace(body.aggregate_types, (placeById(body, store.place) orelse return error.InvalidPlace).*) != null) or
-                        store.ty == .closed_enum or store.ty == .open_enum)
+                        store.ty == .closed_enum or store.ty == .open_enum or
+                        pointerLikeStoreType(store.ty))
                     {
                         try out.appendSlice(allocator, "__atomic_store_n(");
                         try emitPlaceAddress(allocator, out, body, store.place);
@@ -3340,6 +3346,11 @@ fn memoryLoadSupported(
             // `message: *const u8`. The nullable-pointer branch above already
             // accepts this shape; the plain-pointer path had not.
             globalScalarLoadPlace(body, place.*) or
+            // A pointer-typed field of a global aggregate: `maybe_box.ptr`.
+            // `scalarAccessPlaceSupported` is the renderer's own answer to
+            // "can I address this place", and a pointer field is addressable
+            // for the same reason a scalar field is.
+            scalarAccessPlaceSupported(body, place.*) or
             // An element of a fixed array of pointers is a pointer value like
             // any other. This is the same place shape `canEmitBody` already
             // accepts for reading a scalar element; only the pointer-typed
@@ -3814,6 +3825,16 @@ fn scalarAccessPlaceSupported(body: *const mir.ExecutableBody, place: mir.Execut
         computedRawManyDerefPlaceSupported(body, place, false);
 }
 
+/// A thin pointer, nullable or not: one machine word the renderer can write
+/// with a single relaxed atomic store. The slice kinds are excluded, being fat
+/// pointers with their own two-field store.
+fn pointerLikeStoreType(ty: mir.ValueType) bool {
+    return switch (ty) {
+        .pointer, .nullable_pointer => |shape| shape.kind != .slice,
+        else => false,
+    };
+}
+
 fn memoryStoreSupported(
     body: *const mir.ExecutableBody,
     statement: mir.ExecutableStatement,
@@ -3831,7 +3852,8 @@ fn memoryStoreSupported(
         !mir.executableRaceAggregateTypeSupported(body, place.type_id, place.ty)) return false;
     if (place.projection_count != 0) {
         if (!aggregate_copy and !isSliceType(store.ty) and scalarMemoryInfo(store.ty) == null and enumTypeForValueType(body, store.ty) == null and
-            mir.executableCallablePlace(body.aggregate_types, place.*) == null and !dyn_store) return false;
+            mir.executableCallablePlace(body.aggregate_types, place.*) == null and !dyn_store and
+            !pointerLikeStoreType(store.ty)) return false;
         if (mir.executableFixedArrayIndexPlace(body, place.*)) |indexed| {
             const access_ok = if (indexed.indirectPointee())
                 store.access.kind == .race_unordered and mir.executableFixedArrayIndirectPointeePlace(body, place.*, true)
@@ -3915,6 +3937,7 @@ fn memoryStoreSupported(
             break :global symbol.kind == .global and symbol.mutable and
                 store.access.kind == expected_kind and
                 (aggregate_copy or scalarMemoryInfo(store.ty) != null or enumTypeForValueType(body, store.ty) != null or
+                    pointerLikeStoreType(store.ty) or
                     (store.ty == .value and mir.executableCallablePlace(body.aggregate_types, place.*) != null));
         } else false,
         .value => false,
