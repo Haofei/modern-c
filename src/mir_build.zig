@@ -7736,7 +7736,7 @@ pub const FunctionBuilder = struct {
             if (!successor.isValid() or successor.index() >= legacy_blocks.len) return null;
             for (legacy_blocks[successor.index()].instructions) |instruction| {
                 if (instruction.kind == .expr and instruction.result_ty == .branch and
-                    std.mem.eql(u8, instruction.detail, "_"))
+                    switchMarkerHasWildcard(instruction))
                 {
                     has_explicit_default = true;
                     break;
@@ -7760,39 +7760,35 @@ pub const FunctionBuilder = struct {
                 result.default_block = successor;
                 continue;
             };
-            if (std.mem.eql(u8, arm.detail, "_")) {
-                if (result.default_block.isValid()) return null;
-                result.default_block = successor;
-                continue;
+            if (arm.typed_switch_pattern_count == 0) return null;
+            for (arm.typed_switch_patterns[0..arm.typed_switch_pattern_count]) |pattern| {
+                const value: mir_model.ExecutableSwitchValue = switch (pattern) {
+                    .scalar => |scalar| if (scalar.negative)
+                        .{ .signed = -(std.math.cast(i128, scalar.magnitude) orelse return null) }
+                    else
+                        .{ .unsigned = scalar.magnitude },
+                    .wildcard => {
+                        if (result.default_block.isValid()) return null;
+                        result.default_block = successor;
+                        continue;
+                    },
+                    .unused => return null,
+                };
+                if (!appendExecutableSwitchCase(&result, value, successor)) return null;
             }
-            if (arm.typed_switch_pattern_count != 0) {
-                for (arm.typed_switch_patterns[0..arm.typed_switch_pattern_count]) |pattern| {
-                    const value: mir_model.ExecutableSwitchValue = switch (pattern) {
-                        .scalar => |scalar| if (scalar.negative)
-                            .{ .signed = -(std.math.cast(i128, scalar.magnitude) orelse return null) }
-                        else
-                            .{ .unsigned = scalar.magnitude },
-                        .wildcard => {
-                            if (result.default_block.isValid()) return null;
-                            result.default_block = successor;
-                            continue;
-                        },
-                        .unused => return null,
-                    };
-                    if (!appendExecutableSwitchCase(&result, value, successor)) return null;
-                }
-                continue;
-            }
-            const literal = self.canonicalExecutableEnumLiteral(arm.detail, subject_ty) orelse return null;
-            const value: mir_model.ExecutableSwitchValue = switch (literal) {
-                .integer => |integer| .{ .unsigned = integer },
-                .signed_integer => |integer| .{ .signed = integer },
-                else => return null,
-            };
-            if (!appendExecutableSwitchCase(&result, value, successor)) return null;
         }
         if (result.case_count == 0 or !result.default_block.isValid()) return null;
         return result;
+    }
+
+    /// Does this arm marker admit every remaining subject value? A `_` arm,
+    /// an arm with no patterns, and an alternation whose last choice is `_`
+    /// all record a typed wildcard.
+    fn switchMarkerHasWildcard(instruction: Instruction) bool {
+        for (instruction.typed_switch_patterns[0..instruction.typed_switch_pattern_count]) |pattern| {
+            if (pattern == .wildcard) return true;
+        }
+        return false;
     }
 
     fn appendExecutableSwitchCase(result: *mir_model.ExecutableSwitchTerminator, value: mir_model.ExecutableSwitchValue, target: BlockId) bool {
@@ -12158,16 +12154,10 @@ pub const FunctionBuilder = struct {
                 try self.recordTrueCondFacts(node.subject);
             }
             try self.addInstr(.expr, if (arm.patterns.len == 0) "_" else patternText(arm.patterns[0]), .branch, span);
-            if (self.normalizedScalarSwitchPatterns(arm.patterns)) |patterns| {
+            if (self.normalizedSwitchPatterns(subject_ty, arm.patterns, tagged_union_switch)) |patterns| {
                 const marker = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
                 marker.typed_switch_patterns = patterns.values;
                 marker.typed_switch_pattern_count = patterns.count;
-            } else if (tagged_union_switch) {
-                if (self.normalizedTaggedUnionSwitchPatterns(subject_ty, arm.patterns)) |patterns| {
-                    const marker = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
-                    marker.typed_switch_patterns = patterns.values;
-                    marker.typed_switch_pattern_count = patterns.count;
-                }
             }
             const narrowed_binding = if (arm.patterns.len > 0) self.switchNarrowedBinding(node.subject, arm.patterns[0]) else null;
             var had_previous_type = false;
@@ -17860,6 +17850,51 @@ pub const FunctionBuilder = struct {
         values: [Instruction.max_switch_patterns]Instruction.SwitchPattern = [_]Instruction.SwitchPattern{.unused} ** Instruction.max_switch_patterns,
         count: usize = 0,
     };
+
+    /// The typed patterns for one switch arm, in the order the arm families
+    /// are tried: plain scalars and wildcards first, then a tagged union's
+    /// case index, then a nominal enum's checked discriminant. Recording the
+    /// enum family here is what lets `executableTypedSwitch` read arms from
+    /// the typed marker instead of re-reading the case spelling off the
+    /// legacy instruction's `detail` string.
+    fn normalizedSwitchPatterns(
+        self: *FunctionBuilder,
+        subject_ty: ValueType,
+        patterns: []const ast.Pattern,
+        tagged_union_switch: bool,
+    ) ?NormalizedSwitchPatterns {
+        if (self.normalizedScalarSwitchPatterns(patterns)) |scalar| return scalar;
+        if (tagged_union_switch) return self.normalizedTaggedUnionSwitchPatterns(subject_ty, patterns);
+        return self.normalizedEnumSwitchPatterns(subject_ty, patterns);
+    }
+
+    /// `Red => ...` names a case of the subject's enum. The checked
+    /// discriminant is the one `canonicalExecutableEnumLiteral` resolves, so
+    /// the arm marker carries the value rather than the spelling.
+    fn normalizedEnumSwitchPatterns(self: *FunctionBuilder, subject_ty: ValueType, patterns: []const ast.Pattern) ?NormalizedSwitchPatterns {
+        switch (subject_ty) {
+            .closed_enum, .open_enum => {},
+            else => return null,
+        }
+        if (patterns.len == 0 or patterns.len > Instruction.max_switch_patterns) return null;
+        var result: NormalizedSwitchPatterns = .{};
+        for (patterns, 0..) |pattern, index| {
+            result.values[index] = switch (pattern.kind) {
+                .wildcard => .wildcard,
+                .bind, .tag, .tag_bind => switch (self.canonicalExecutableEnumLiteral(patternText(pattern), subject_ty) orelse return null) {
+                    .integer => |value| .{ .scalar = .{ .negative = false, .magnitude = value } },
+                    .signed_integer => |value| if (value < 0)
+                        .{ .scalar = .{ .negative = true, .magnitude = @intCast(-value) } }
+                    else
+                        .{ .scalar = .{ .negative = false, .magnitude = @intCast(value) } },
+                    else => return null,
+                },
+                else => return null,
+            };
+        }
+        result.count = patterns.len;
+        return result;
+    }
 
     fn normalizedScalarSwitchPatterns(self: *FunctionBuilder, patterns: []const ast.Pattern) ?NormalizedSwitchPatterns {
         _ = self;
