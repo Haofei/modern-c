@@ -170,9 +170,15 @@ As of this writing the exceptions are:
 - four unit-test roots (`lower_c_tests.zig`, `lower_llvm_tests.zig`,
   `mir_body_plan_tests.zig`) that parse MC fixture source in-process — test
   drivers, not lowering paths;
-- nineteen `ast_bridge` / `type_bridge` edges in the C backend, where emission
-  still receives AST-shaped declarations (globals, aggregates, inline asm,
-  MMIO) and AST-shaped type expressions for naming and shape decisions.
+- thirteen `ast_bridge` / `type_bridge` edges in the C backend, where emission
+  still receives AST-shaped declarations (globals, aggregates, inline asm) and
+  AST-shaped type expressions for naming and shape decisions.
+
+The declaration collector (`lower_c_defs.zig`) and the MMIO declaration
+renderer (`lower_c_mmio_defs.zig`) are off that list: both now render from the
+`EnumFact` / `TaggedUnionFact` / `StructFact` rows and the `SignatureTypeId`s
+inside them. `lower_c_type.appendSignatureType` is `appendType` over the
+interned signature graph, and is the renderer those declarations use.
 
 The LLVM backend has no non-test exception.
 

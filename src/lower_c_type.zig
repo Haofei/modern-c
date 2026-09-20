@@ -11,6 +11,8 @@ const ast_bridge = @import("ast_bridge.zig");
 const c_identifier = @import("c_identifier.zig");
 const scalar_repr = @import("scalar_repr.zig");
 const lower_c_model = @import("lower_c_model.zig");
+const mir = @import("mir.zig");
+const signature_type_mechanics = @import("signature_type_mechanics.zig");
 const type_bridge = @import("type_bridge.zig");
 
 const typeName = type_bridge.typeName;
@@ -26,6 +28,20 @@ pub const ArrayTypeNameFn = *const fn (ctx: *anyopaque, child: ast_bridge.TypeEx
 pub const ResultTypeNameFn = *const fn (ctx: *anyopaque, ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr) anyerror![]const u8;
 pub const TypeNameFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
 pub const DynTypeNameFn = *const fn (ctx: *anyopaque, trait_name: []const u8) anyerror![]const u8;
+
+/// Generated-typedef name constructors over module-owned signature type ids.
+/// They are the syntax-free counterparts of the `*TypeNameFn` family above,
+/// and name the same typedefs: the slice/array/opt/result artifacts the C
+/// emitter registers are already keyed on signature ids, so a declaration
+/// rendered from a `SignatureTypeId` names exactly the typedef that was
+/// collected for it.
+pub const SignatureSliceTypeNameFn = *const fn (ctx: *anyopaque, child: mir.SignatureTypeId, mutability: mir.TypeMutability) anyerror![]const u8;
+pub const SignatureArrayTypeNameFn = *const fn (ctx: *anyopaque, child: mir.SignatureTypeId, length: usize) anyerror![]const u8;
+pub const SignaturePairTypeNameFn = *const fn (ctx: *anyopaque, left: mir.SignatureTypeId, right: mir.SignatureTypeId) anyerror![]const u8;
+pub const SignatureTypeNameFn = *const fn (ctx: *anyopaque, id: mir.SignatureTypeId) anyerror![]const u8;
+pub const SignatureCallableTypeNameFn = *const fn (ctx: *anyopaque, ret: mir.SignatureTypeId, params: []const mir.SignatureTypeId) anyerror![]const u8;
+/// The interned target of a transparent type alias, by declared spelling.
+pub const SignatureAliasTargetFn = *const fn (ctx: *anyopaque, name: []const u8) ?mir.SignatureTypeId;
 
 pub const TypeEmitContext = struct {
     scratch: std.mem.Allocator,
@@ -44,6 +60,14 @@ pub const TypeEmitContext = struct {
     closure_type_name: TypeNameFn,
     dyn_type_name: DynTypeNameFn,
     opt_type_name: TypeNameFn,
+    signature_types: mir.SignatureTypeTable,
+    signature_alias_target: SignatureAliasTargetFn,
+    signature_slice_type_name: SignatureSliceTypeNameFn,
+    signature_array_type_name: SignatureArrayTypeNameFn,
+    signature_result_type_name: SignaturePairTypeNameFn,
+    signature_opt_type_name: SignatureTypeNameFn,
+    signature_fn_ptr_type_name: SignatureCallableTypeNameFn,
+    signature_closure_type_name: SignatureCallableTypeNameFn,
 };
 
 // A `?T` payload T uses the tagged `mc_opt_<T>` repr iff T is a sized VALUE type
@@ -141,6 +165,137 @@ pub fn appendType(ctx: TypeEmitContext, out: *std.ArrayList(u8), ty: ast_bridge.
 
 pub fn appendPointerType(ctx: TypeEmitContext, out: *std.ArrayList(u8), child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability, style: StructTypeStyle) anyerror!void {
     try appendType(ctx, out, child, style);
+    if (mutability == .@"const") {
+        try out.appendSlice(ctx.scratch, " const *");
+    } else {
+        try out.appendSlice(ctx.scratch, " *");
+    }
+}
+
+// ----- Signature-id rendering ----------------------------------------------
+//
+// `appendSignatureType` is `appendType` over a module-owned `SignatureTypeId`
+// instead of an `ast.TypeExpr`. It is the renderer the declaration collector
+// uses, so a type declaration is spelled from the checked fact that carries it
+// rather than from syntax materialized back out of that fact. Nominal
+// classification still goes through the emitter's name-keyed declaration maps,
+// which is the same question asked of the same table.
+
+/// The nominal spelling of a signature type after transparent qualifiers, or
+/// `null` when the shape is not a name. Mirrors `type_bridge.typeName`.
+pub fn signatureTypeSpelling(ctx: TypeEmitContext, id: mir.SignatureTypeId) ?[]const u8 {
+    return switch (signature_type_mechanics.shape(ctx.signature_types, id) catch return null) {
+        .name => |name| name,
+        .qualified => |node| signatureTypeSpelling(ctx, node.child),
+        else => null,
+    };
+}
+
+/// The alias target of a signature type, or `null` when it names no alias.
+/// Mirrors `type_bridge.aliasTargetType`, including its self-alias guard.
+pub fn signatureAliasTarget(ctx: TypeEmitContext, id: mir.SignatureTypeId) ?mir.SignatureTypeId {
+    return switch (signature_type_mechanics.shape(ctx.signature_types, id) catch return null) {
+        .name => |name| blk: {
+            const target = ctx.signature_alias_target(ctx.emit_ctx, name) orelse return null;
+            if (signatureTypeSpelling(ctx, target)) |target_name| {
+                if (std.mem.eql(u8, target_name, name)) return null;
+            }
+            break :blk target;
+        },
+        .qualified => |node| signatureAliasTarget(ctx, node.child),
+        else => null,
+    };
+}
+
+/// The signature-id counterpart of `nullablePayloadIsValueType`.
+pub fn signatureNullablePayloadIsValueType(ctx: TypeEmitContext, child: mir.SignatureTypeId) bool {
+    const resolved = signatureAliasTarget(ctx, child) orelse child;
+    return switch (signature_type_mechanics.shape(ctx.signature_types, resolved) catch return false) {
+        .name => |name| !std.mem.eql(u8, name, "c_void"),
+        .qualified => |node| signatureNullablePayloadIsValueType(ctx, node.child),
+        else => false,
+    };
+}
+
+pub fn appendSignatureType(ctx: TypeEmitContext, out: *std.ArrayList(u8), id: mir.SignatureTypeId, style: StructTypeStyle) anyerror!void {
+    if (signatureAliasTarget(ctx, id)) |target| return appendSignatureType(ctx, out, target, style);
+    const shape = signature_type_mechanics.shape(ctx.signature_types, id) catch return error.UnsupportedCEmission;
+    switch (shape) {
+        .pointer => |node| return appendSignaturePointerType(ctx, out, node.child, node.mutability, style),
+        .raw_many_pointer => |node| return appendSignaturePointerType(ctx, out, node.child, node.mutability, style),
+        .slice => |node| return out.appendSlice(ctx.scratch, try ctx.signature_slice_type_name(ctx.emit_ctx, node.child, node.mutability)),
+        .array => |node| return out.appendSlice(ctx.scratch, try ctx.signature_array_type_name(ctx.emit_ctx, node.child, node.length orelse return error.UnsupportedCEmission)),
+        .nullable => |child| {
+            // Value optional `?T`: emit the tagged `mc_opt_<T>` aggregate. Pointer
+            // nullables keep their sentinel repr and lower to the inner type.
+            if (signatureNullablePayloadIsValueType(ctx, child)) {
+                return out.appendSlice(ctx.scratch, try ctx.signature_opt_type_name(ctx.emit_ctx, child));
+            }
+            return appendSignatureType(ctx, out, child, style);
+        },
+        .qualified => |node| return appendSignatureType(ctx, out, node.child, style),
+        .generic => |node| {
+            if (std.mem.eql(u8, node.base, "Result") and node.args.len == 2) {
+                return out.appendSlice(ctx.scratch, try ctx.signature_result_type_name(ctx.emit_ctx, node.args[0], node.args[1]));
+            }
+            if ((std.mem.eql(u8, node.base, "wrap") or
+                std.mem.eql(u8, node.base, "sat") or
+                std.mem.eql(u8, node.base, "serial") or
+                std.mem.eql(u8, node.base, "counter") or
+                // `Secret<T>` is a transparent constant-time tag: it emits as T.
+                std.mem.eql(u8, node.base, "Secret") or
+                std.mem.eql(u8, node.base, "Duration")) and node.args.len == 1)
+            {
+                return appendSignatureType(ctx, out, node.args[0], style);
+            }
+            if (std.mem.eql(u8, node.base, "atomic") and node.args.len == 1) {
+                return appendSignatureType(ctx, out, node.args[0], style);
+            }
+            if (std.mem.eql(u8, node.base, "MaybeUninit") and node.args.len == 1) {
+                return appendSignatureType(ctx, out, node.args[0], style);
+            }
+            if ((std.mem.eql(u8, node.base, "Reg") or std.mem.eql(u8, node.base, "RegBits")) and node.args.len >= 1) {
+                return appendSignatureType(ctx, out, node.args[0], style);
+            }
+            if (std.mem.eql(u8, node.base, "DmaBuf") and node.args.len == 2) {
+                return appendSignaturePointerType(ctx, out, node.args[0], .mut, style);
+            }
+            if (std.mem.eql(u8, node.base, "UserPtr") or std.mem.eql(u8, node.base, "PhysPtr")) {
+                return out.appendSlice(ctx.scratch, "uintptr_t");
+            }
+            if (std.mem.eql(u8, node.base, "MmioPtr") and node.args.len == 1) {
+                const pointee = signatureTypeSpelling(ctx, node.args[0]) orelse return out.appendSlice(ctx.scratch, "void *");
+                if (ctx.mmio_structs.contains(pointee)) {
+                    try out.appendSlice(ctx.scratch, pointee);
+                    return out.appendSlice(ctx.scratch, " volatile *");
+                }
+            }
+        },
+        .fn_pointer => |node| return out.appendSlice(ctx.scratch, try ctx.signature_fn_ptr_type_name(ctx.emit_ctx, node.ret, node.params)),
+        .closure_type => |node| return out.appendSlice(ctx.scratch, try ctx.signature_closure_type_name(ctx.emit_ctx, node.ret, node.params)),
+        // A `*dyn Trait` lowers to its fat-pointer typedef `mc_dyn_Trait`
+        // (`struct { void *data; const VT_Trait *vtable; }`).
+        .dyn_trait => |node| return out.appendSlice(ctx.scratch, try ctx.dyn_type_name(ctx.emit_ctx, node.trait_name)),
+        else => {},
+    }
+    if (signatureTypeSpelling(ctx, id)) |name| {
+        if (std.mem.eql(u8, name, "c_void")) return out.appendSlice(ctx.scratch, "void");
+        if (ctx.enums.contains(name)) return out.appendSlice(ctx.scratch, name);
+        if (ctx.packed_bits.contains(name)) return out.appendSlice(ctx.scratch, name);
+        if (ctx.overlay_unions.contains(name)) return out.appendSlice(ctx.scratch, name);
+        if (ctx.tagged_unions.contains(name)) return out.appendSlice(ctx.scratch, name);
+        if (ctx.structs.get(name)) |struct_decl| {
+            // A `#[c_union]` is emitted as a C `union`; its tag keyword must match.
+            if (style == .struct_tag) try out.appendSlice(ctx.scratch, if (struct_decl.is_c_union) "union " else "struct ");
+            return out.appendSlice(ctx.scratch, name);
+        }
+        return out.appendSlice(ctx.scratch, primitiveCTypeName(name) orelse "void *");
+    }
+    try out.appendSlice(ctx.scratch, "void *");
+}
+
+pub fn appendSignaturePointerType(ctx: TypeEmitContext, out: *std.ArrayList(u8), child: mir.SignatureTypeId, mutability: mir.TypeMutability, style: StructTypeStyle) anyerror!void {
+    try appendSignatureType(ctx, out, child, style);
     if (mutability == .@"const") {
         try out.appendSlice(ctx.scratch, " const *");
     } else {

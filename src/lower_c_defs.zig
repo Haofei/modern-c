@@ -1,12 +1,15 @@
 //! C backend typedef/aggregate declaration emitters.
 //!
 //! This module owns passive C declaration shapes. The main emitter still owns
-//! type spelling, declarator spelling, and expression-specific literal emission
-//! through a narrow callback context.
+//! type and declarator spelling through a narrow callback context, but that
+//! context is typed on module-owned facts: a declaration is rendered from the
+//! `EnumFact` / `TaggedUnionFact` / `StructFact` that carries it and from the
+//! `SignatureTypeId` rows inside it, never from syntax materialized back out
+//! of those facts.
 
 const std = @import("std");
 
-const ast_bridge = @import("ast_bridge.zig");
+const lower_c_const = @import("lower_c_const.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
@@ -20,11 +23,9 @@ const SliceInfo = lower_c_model.SliceInfo;
 
 const cPayloadFieldName = lower_c_type.cPayloadFieldName;
 
-pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
+pub const CTypeFn = *const fn (ctx: *anyopaque, id: mir.SignatureTypeId) anyerror![]const u8;
 pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]const u8;
-pub const DeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;
-pub const FieldDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;
-pub const EnumCaseValueFn = *const fn (ctx: *anyopaque, value: ast_bridge.Expr) anyerror!void;
+pub const FieldDeclaratorFn = *const fn (ctx: *anyopaque, id: mir.SignatureTypeId, name: []const u8) anyerror!void;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -35,30 +36,22 @@ pub const Context = struct {
     emit_ctx: *anyopaque,
     c_type: CTypeFn,
     c_ident: CIdentFn,
-    declarator: DeclaratorFn,
     field_declarator: FieldDeclaratorFn,
-    enum_case_value: EnumCaseValueFn,
 };
 
-pub fn emitEnums(ctx: Context, enums: *std.StringHashMap(ast_bridge.EnumDecl)) !void {
-    var it = enums.valueIterator();
-    while (it.next()) |enum_decl| try emitEnumType(ctx, enum_decl.*);
-}
-
-pub fn emitEnumType(ctx: Context, enum_decl: ast_bridge.EnumDecl) !void {
-    const repr = if (enum_decl.repr) |repr_ty| try ctx.c_type(ctx.emit_ctx, repr_ty) else "intptr_t";
-    try ctx.out.print(ctx.allocator, "typedef {s} {s};\n", .{ repr, enum_decl.name.text });
+/// A nominal enum: a typedef for its checked representation plus one
+/// enumerator per case. Every discriminant is already reduced to a sign and a
+/// magnitude by the frontend, so nothing here re-reads a value expression.
+pub fn emitEnumType(ctx: Context, name: []const u8, fact: mir.EnumFact) !void {
+    const repr = try ctx.c_type(ctx.emit_ctx, fact.repr_type_id);
+    try ctx.out.print(ctx.allocator, "typedef {s} {s};\n", .{ repr, name });
     try ctx.out.appendSlice(ctx.allocator, "enum {\n");
     ctx.indent.* += 1;
-    for (enum_decl.cases, 0..) |case, i| {
+    for (fact.cases) |case| {
         try writeIndent(ctx);
-        try ctx.out.print(ctx.allocator, "{s}_{s}", .{ enum_decl.name.text, case.name.text });
-        if (case.value) |value| {
-            try ctx.out.appendSlice(ctx.allocator, " = ");
-            try ctx.enum_case_value(ctx.emit_ctx, value);
-        } else {
-            try ctx.out.print(ctx.allocator, " = {d}", .{i});
-        }
+        try ctx.out.print(ctx.allocator, "{s}_{s} = ", .{ name, case.spelling });
+        if (case.negative) try ctx.out.appendSlice(ctx.allocator, "-");
+        try lower_c_const.appendCIntValue(ctx.allocator, ctx.out, case.magnitude);
         try ctx.out.appendSlice(ctx.allocator, ",\n");
     }
     ctx.indent.* -= 1;
@@ -86,31 +79,31 @@ pub fn emitOverlayUnionType(ctx: Context, name: []const u8, info: OverlayUnionIn
     try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{name});
 }
 
-pub fn emitTaggedUnionType(ctx: Context, union_decl: ast_bridge.UnionDecl) !void {
-    try ctx.out.print(ctx.allocator, "typedef enum {s}Tag {{\n", .{union_decl.name.text});
+pub fn emitTaggedUnionType(ctx: Context, name: []const u8, cases: []const mir.TaggedUnionCaseFact) !void {
+    try ctx.out.print(ctx.allocator, "typedef enum {s}Tag {{\n", .{name});
     ctx.indent.* += 1;
-    for (union_decl.cases, 0..) |case, i| {
+    for (cases, 0..) |case, i| {
         try writeIndent(ctx);
-        try ctx.out.print(ctx.allocator, "{s}Tag_{s} = {d},\n", .{ union_decl.name.text, case.name.text, i });
+        try ctx.out.print(ctx.allocator, "{s}Tag_{s} = {d},\n", .{ name, case.spelling, i });
     }
     ctx.indent.* -= 1;
-    try ctx.out.print(ctx.allocator, "}} {s}Tag;\n\n", .{union_decl.name.text});
+    try ctx.out.print(ctx.allocator, "}} {s}Tag;\n\n", .{name});
 
-    try ctx.out.print(ctx.allocator, "typedef struct {s} {{\n", .{union_decl.name.text});
+    try ctx.out.print(ctx.allocator, "typedef struct {s} {{\n", .{name});
     ctx.indent.* += 1;
     try writeIndent(ctx);
-    try ctx.out.print(ctx.allocator, "{s}Tag tag;\n", .{union_decl.name.text});
+    try ctx.out.print(ctx.allocator, "{s}Tag tag;\n", .{name});
 
-    if (taggedUnionHasPayload(union_decl)) {
+    if (taggedUnionHasPayload(cases)) {
         try writeIndent(ctx);
         try ctx.out.appendSlice(ctx.allocator, "union {\n");
         ctx.indent.* += 1;
-        for (union_decl.cases) |case| {
-            const payload_ty = case.ty orelse continue;
+        for (cases) |case| {
+            const payload_type_id = case.payload_type_id orelse continue;
             try writeIndent(ctx);
             try ctx.out.print(ctx.allocator, "{s} {s};\n", .{
-                try ctx.c_type(ctx.emit_ctx, payload_ty),
-                try cPayloadFieldName(ctx.scratch, case.name.text),
+                try ctx.c_type(ctx.emit_ctx, payload_type_id),
+                try cPayloadFieldName(ctx.scratch, case.spelling),
             });
         }
         ctx.indent.* -= 1;
@@ -119,7 +112,7 @@ pub fn emitTaggedUnionType(ctx: Context, union_decl: ast_bridge.UnionDecl) !void
     }
 
     ctx.indent.* -= 1;
-    try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{union_decl.name.text});
+    try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{name});
 }
 
 pub fn emitFunctionSignature(ctx: Context, name: []const u8, params: []const mir.CallableParameterEmissionFact, is_variadic: bool, ret: []const u8, param_types: []const []const u8, is_static: bool, with_asm_label: bool) !void {
@@ -162,24 +155,19 @@ fn emitFunctionBackendAsmLabel(ctx: Context, name: []const u8, with_asm_label: b
     try ctx.out.appendSlice(ctx.allocator, "\")");
 }
 
-pub fn emitParamDecl(ctx: Context, ty: ast_bridge.TypeExpr, name: []const u8) !void {
-    try emitIgnoredLocalPrefix(ctx, name);
-    try ctx.declarator(ctx.emit_ctx, ty, name);
-}
-
-pub fn emitStruct(ctx: Context, struct_decl: ast_bridge.StructDecl) !void {
+pub fn emitStruct(ctx: Context, name: []const u8, is_c_union: bool, fields: []const mir.StructFieldFact) !void {
     // A `#[c_union]` lowers to a real C `union`: identical member declarations, but union
     // layout (all fields at offset 0, size = largest arm) and alias-safe `&u.field` access.
-    const keyword: []const u8 = if (struct_decl.is_c_union) "union" else "struct";
-    try ctx.out.print(ctx.allocator, "typedef {s} {s} {{\n", .{ keyword, struct_decl.name.text });
+    const keyword: []const u8 = if (is_c_union) "union" else "struct";
+    try ctx.out.print(ctx.allocator, "typedef {s} {s} {{\n", .{ keyword, name });
     ctx.indent.* += 1;
-    for (struct_decl.fields) |field| {
+    for (fields) |field| {
         try writeIndent(ctx);
-        try ctx.field_declarator(ctx.emit_ctx, field.ty, field.name.text);
+        try ctx.field_declarator(ctx.emit_ctx, field.type_id, field.spelling);
         try ctx.out.appendSlice(ctx.allocator, ";\n");
     }
     ctx.indent.* -= 1;
-    try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{struct_decl.name.text});
+    try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{name});
 }
 
 pub fn emitSliceTypes(ctx: Context, slice_types: *std.StringHashMap(SliceInfo)) !void {
@@ -247,9 +235,9 @@ fn writeIndent(ctx: Context) !void {
     for (0..ctx.indent.*) |_| try ctx.out.appendSlice(ctx.allocator, "    ");
 }
 
-fn taggedUnionHasPayload(union_decl: ast_bridge.UnionDecl) bool {
-    for (union_decl.cases) |case| {
-        if (case.ty != null) return true;
+fn taggedUnionHasPayload(cases: []const mir.TaggedUnionCaseFact) bool {
+    for (cases) |case| {
+        if (case.payload_type_id != null) return true;
     }
     return false;
 }
