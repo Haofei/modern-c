@@ -143,6 +143,23 @@ the obvious one:
 remains there is `index` / `range_slice` over slices whose elements are
 pointers.
 
+### Note: the sweep gaps that are left
+
+Nine `E_BACKEND_UNSUPPORTED` entries remain in
+`backend-expected-failures.json`, in six families. Largest first:
+
+| Family | Fixtures | What it is |
+|---|---|---|
+| `builtin_call` result not accepted | `cast_class_strip.mc`, `serial_counter_ops.mc` | `executableExpressionComplete` rejects a `builtin_call` whose result is a pointer (`bitcast<*u8>`) or a `domain_integer` (`Ticks.elapsed_assume_within`). |
+| `incoherent_cleanup_action` | `try_propagation.mc`, `move_borrow_escape.mc` | Not a cleanup-action problem despite the name: both reach it through `executableTrapProjectionComplete`, where a legacy trap edge has no executable counterpart. For `accept_result_pointer_try` it is the `Result<*mut u8, E>` unwrap, whose pointer payload adds a representation edge the try-propagation projection does not enumerate. |
+| `incoherent_expression` (slices of pointers) | `data_race_semantics.mc` | `index` / `range_slice` over a slice whose element type is a pointer. |
+| `unsupported_call` | `comptime_params.mc` | |
+| `unsupported_try` | `hosted_io.mc` | |
+| `incoherent_place` | `local_address_escape.mc` | |
+| `incoherent_executable_shape` | `type_arg_and_trivial_drop_reject.mc` | |
+
+The five `E_EXPERIMENTAL_DYN_CODEGEN` entries are policy and stay.
+
 Not on the list: removing traits, closures, generics, or the advanced ownership
 forms. All were measured and none is a bounded cut. They stay frozen.
 
