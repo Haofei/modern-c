@@ -2699,11 +2699,14 @@ pub fn executableParameterProjectedPlace(
         .local => |id| id,
         .symbol, .value => return false,
     };
-    const parameter_root = executableParameterPointerRoot(body, local, place.root_ty, place.root_type_id);
-    const typed_root = if (parameter_root)
-        !place.root_initialization.isValid()
+    // A pointer parameter itself carries no initializing statement, so its
+    // places record no witness.  A local that merely aliases such a parameter
+    // is still a pointer generation of its own and does record one; validate
+    // that witness exactly as any other local pointer root's.
+    const typed_root = if (place.root_initialization.isValid())
+        executableLocalPointerInitialization(body, place, local)
     else
-        executableLocalPointerInitialization(body, place, local);
+        executableParameterPointerRoot(body, local, place.root_ty, place.root_type_id);
     if (!typed_root) return false;
     const pointer = switch (place.root_ty) {
         .pointer => |shape| shape,

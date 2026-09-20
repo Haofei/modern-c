@@ -8,11 +8,12 @@
 // by-value local aggregate's field/element) is a real dangling escape and stays rejected.
 //
 // This fixture proves the accepted forms alias the REAL field: it takes `&e.val` through a
-// pointer parameter, `&e.arr[i]` through a pointer parameter, and `&p.field` where `p` is a
-// LOCAL holding a pointer copy — then mutates through each
-// returned pointer and re-reads the underlying object to confirm the alias.
+// pointer parameter, `&e.arr[i]` through a pointer parameter, and `&p.field`,
+// `&p.arr[i]` and `&p.inner.field` where `p` is a LOCAL holding a pointer copy — then
+// mutates through each returned pointer and re-reads the underlying object to confirm the alias.
 
-struct Entry { val: u32, arr: [4]u32 }
+struct Inner { depth: u32 }
+struct Entry { val: u32, arr: [4]u32, inner: Inner }
 
 // (1) `&e.val` through a pointer PARAMETER: address of a field in pointed-to storage.
 fn slot_ptr(e: *mut Entry) -> *mut u32 {
@@ -32,8 +33,31 @@ fn slot_ptr_via_local(e: *mut Entry) -> *mut u32 {
     return &p.val;
 }
 
+// (4) `&p.arr[i]`: the same local pointer copy, projected through an array index.
+fn arr_slot_ptr_via_local(e: *mut Entry, i: usize) -> *mut u32 {
+    let p: *mut Entry = e;
+    return &p.arr[i];
+}
+
+// (5) `&p.inner.depth`: the same local pointer copy, projected two fields deep.
+fn nested_slot_ptr_via_local(e: *mut Entry) -> *mut u32 {
+    let p: *mut Entry = e;
+    return &p.inner.depth;
+}
+
+// (6) Reading and writing a field through the local pointer copy, without taking an address.
+fn read_val_via_local(e: *mut Entry) -> u32 {
+    let p: *mut Entry = e;
+    return p.val;
+}
+
+fn write_val_via_local(e: *mut Entry, next: u32) -> void {
+    let p: *mut Entry = e;
+    p.val = next;
+}
+
 export fn pointer_field_addr_run() -> u32 {
-    var e: Entry = .{ .val = 10, .arr = .{ 1, 2, 3, 4 } };
+    var e: Entry = .{ .val = 10, .arr = .{ 1, 2, 3, 4 }, .inner = .{ .depth = 5 } };
 
     // (1) The returned pointer must alias e.val: write through it, read the field back.
     let vp: *mut u32 = slot_ptr(&e);
@@ -50,6 +74,23 @@ export fn pointer_field_addr_run() -> u32 {
     let lp: *mut u32 = slot_ptr_via_local(&e);
     lp.* = 99;
     if e.val != 99 { return 0; }
+
+    // (4) The local-pointer-copy path through an array index aliases the element.
+    let lap: *mut u32 = arr_slot_ptr_via_local(&e, 3);
+    lap.* = 66;
+    if e.arr[3] != 66 { return 0; }
+    if e.arr[2] != 88 { return 0; }  // neighbouring elements untouched
+
+    // (5) Two fields deep through the local pointer copy.
+    let np: *mut u32 = nested_slot_ptr_via_local(&e);
+    np.* = 55;
+    if e.inner.depth != 55 { return 0; }
+
+    // (6) Plain read and write through the local pointer copy see the same storage.
+    if read_val_via_local(&e) != 99 { return 0; }
+    write_val_via_local(&e, 44);
+    if e.val != 44 { return 0; }
+    if read_val_via_local(&e) != 44 { return 0; }
 
     return 1;
 }

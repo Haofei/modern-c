@@ -2,13 +2,7 @@
   "schema_version": 1,
   "source_of_truth": "docs/backend-expected-failures.json",
   "purpose": "Fixtures the C backend cannot compile today. `emit_c` covers tests/c_emit (checked by c-test); `sweep` covers the tests/spec corpus as the emit sweep chunks it (checked by spec-emit-sweep.py). Each entry is still asserted: it must fail, and fail for the recorded reason. A fixture that starts passing, stops failing for its recorded reason, or begins failing without an entry here fails its gate.",
-  "emit_c": [
-    {
-      "fixture": "tests/c_emit/pointer_field_addr.mc",
-      "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter cannot render this construct yet; emitVerifiedMirFunction declines it."
-    }
-  ],
+  "emit_c": [],
   "sweep": [
     {
       "fixture": "address_classes.mc",
