@@ -75,7 +75,7 @@ backends off syntax, is described in
 
 | Priority | Work | Why, and what it depends on |
 |---|---|---|
-| P0 | Collapse MIR to the single `ExecutableBody`: move the remaining consumers of the string `Instruction.detail` field off it, rewrite the legacy-stream checks in `mir_verify.zig` against the typed body, fold instruction-scoped fact tables into typed nodes, repoint `mir_dump.zig`, then delete `Function.blocks[].instructions`. | The core of the original design review. Two body representations cost every change twice. Depends on the golden-test conversion below for affordability. |
+| P0 | Collapse MIR to the single `ExecutableBody`: move the remaining consumers of the string `Instruction.detail` field off it (see the note below), rewrite the legacy-stream checks in `mir_verify.zig` against the typed body, fold instruction-scoped fact tables into typed nodes, repoint `mir_dump.zig`, then delete `Function.blocks[].instructions`. | The core of the original design review. Two body representations cost every change twice. Depends on the golden-test conversion below for affordability. |
 | P0 | Replace the string-carrying `mir.ValueType` with type ids from the resolved table, then drop the parallel `typed_result_ty` mirrors. | Falls out once the table answers everything `ValueType.name()` is asked for. |
 | P0 | Finish the sema handoff: intrinsic call results where sema and builder share one rule, `address_of` / `borrow` / `~`, alias collapse once the emitters take spellings from the table, and deletion of the builder's own type maps once unit tests build MIR through a checker. | Each slice: record in sema, read in the builder under the agree-assertion, delete the builder copy. |
 | P1 | Give expressions a node identity that survives copying, or a per-instance span remap in monomorphization. | Unblocks monomorphizing after sema and stops instances failing closed in the resolved table. |
@@ -84,6 +84,34 @@ backends off syntax, is described in
 | P1 | Clear the remaining `docs/backend-expected-failures.json` entries or record a precise cause for each. | Each entry is a backend feature gap with a minimal reproduction. |
 | P2 | Split `src/mir_build.zig` by construct family and extract the shared AST-query surface still in `src/mir.zig`. | Readability. No behavior change. |
 | P2 | Audit `tools/` for scripts no gate runs; mark spec sections by maturity inline. | Hygiene. |
+
+### Note: the `Instruction.detail` readers that are left
+
+`mir_build.zig` and `mir_body_plan.zig` no longer classify instructions by
+their `detail` string. Three readers remain, and each is blocked on something
+specific rather than on effort:
+
+- **`lower_c_map.zig`** labels source-map rows. Its `target_type` reads have a
+  typed counterpart (`TargetTypeFact.kind`, joined on `typed_inst_id`), but
+  its other three do not: `RepresentationFact.detail` is the same string the
+  instruction carries, the `binary switch_subject` marker has no fact at all
+  (the `.switch_subject` target-type fact names its own `target_type`
+  instruction), and the `expr` arm reads the literal's spelling, which only
+  `ExecutableExpression.operation` models. Converting two of five would leave
+  the file on both sides of the boundary, so it waits for the join below.
+- **`mir_build.zig`'s `addCallTargetFact`** checks that the instruction it just
+  emitted really is the `call_target` the fact claims. That is a cross-check
+  *between* the two representations; it should go when the stream does.
+- **`mir_representation.zig` and `backend_cleanup.zig`** mention `detail` only
+  inside `test {}` blocks, where they hand-build an `Instruction`. Nothing to
+  move: they are test-only consumers.
+
+The missing piece for `lower_c_map.zig` is a join from a legacy instruction to
+the `ExecutableBody` node that realizes it. `Instruction.typed_inst_id` and
+`ExecutableStatement.id` are both `InstId` but come from two independent
+counters in `FunctionBuilder`, and expressions carry no `InstId` at all, so
+today no such join exists. Either number the two from one sequence or give
+`ExecutableExpression` the id of the instruction it replaces.
 
 Not on the list: removing traits, closures, generics, or the advanced ownership
 forms. All were measured and none is a bounded cut. They stay frozen.

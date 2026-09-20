@@ -60,10 +60,15 @@ Not yet typed — the honest list:
 - **Instruction-scoped facts are not yet fields on the typed node.** They key
   on the instruction's identity now rather than on a source span -- integer,
   float, bounds, representation, target-type, call-target, `const_get`, bind
-  thunk and range facts all carry a `typed_inst_id` -- but they are still
-  side tables the verifier joins, not data hanging off `ExecutableBody`.
-  Resolved accesses key on an `AccessId` for the same reason; pointer
-  provenance keys on the place it describes.
+  thunk, range and element/range-slice access facts all carry a
+  `typed_inst_id` -- but they are still side tables the verifier joins, not
+  data hanging off `ExecutableBody`. Resolved accesses also key on an
+  `AccessId`; pointer provenance keys on the place it describes.
+- **There is no join from a legacy instruction to the typed body.**
+  `Instruction.typed_inst_id` and `ExecutableStatement.id` are both `InstId`
+  but come from two independent counters, and `ExecutableExpression` has no
+  `InstId` at all. The remaining `Instruction.detail` readers are listed in
+  [`todo.md`](todo.md); the ones that are still blocked are blocked on this.
 
 ## The sema-to-MIR handoff
 
