@@ -2447,12 +2447,22 @@ fn rangeSliceSupported(
     return start_value <= end_value and end_value <= bound.?;
 }
 
+/// A range-slice base is re-emitted three times -- for the length, for the
+/// bounds check and for the resulting `.ptr` -- so it must name storage that
+/// can be read repeatedly without observable effect, never a computed value.
+/// A field of such a base is itself such a base: the selection is pure and the
+/// renderer already emits `member` through the same `emitExpression` path.
 fn rangeSliceBaseStorageSupported(body: *const mir.ExecutableBody, id: mir.ExprId) bool {
     const expression = expressionById(body, id) orelse return false;
     return switch (expression.operation) {
         .local => |local| localById(body, local) != null,
         .symbol => globalAggregateIndexBase(body, id),
         .representation_check => |check| rangeSliceBaseStorageSupported(body, check.operand),
+        .member => |member| memberSupported(body, expression.*, member) and
+            rangeSliceBaseStorageSupported(body, member.base),
+        // A fat-pointer base is bound to a temporary before it is used, so a
+        // load reaches its storage exactly once, as it would in the source.
+        .load => |load| placeById(body, load.place) != null and isSliceType(expression.result_ty),
         else => false,
     };
 }
@@ -2478,17 +2488,29 @@ fn emitRangeSlice(
     if (!rangeSliceSupported(body, expression, operation)) return error.InvalidExpression;
     const base = expressionById(body, operation.base) orelse return error.InvalidExpression;
     const id = expression.id.raw;
-    try out.print(allocator, "({{ uintptr_t mc_range_start_{d} = ", .{id});
+    // A fat-pointer base supplies both the bound and the resulting `.ptr`.
+    // Bind it once: emitting it twice would read the same storage twice, and
+    // the length checked would not have to be the length sliced.
+    const bind_base = switch (base.result_ty) {
+        .array => false,
+        .pointer, .slice => true,
+        else => return error.InvalidExpression,
+    };
+    try out.appendSlice(allocator, "({ ");
+    if (bind_base) {
+        try appendSliceCType(allocator, out, base.result_ty);
+        try out.print(allocator, " mc_range_base_{d} = ", .{id});
+        try emitExpression(allocator, out, body, operation.base, depth + 1);
+        try out.appendSlice(allocator, "; ");
+    }
+    try out.print(allocator, "uintptr_t mc_range_start_{d} = ", .{id});
     try emitExpression(allocator, out, body, operation.start, depth + 1);
     try out.print(allocator, "; uintptr_t mc_range_end_{d} = ", .{id});
     try emitExpression(allocator, out, body, operation.end, depth + 1);
     try out.print(allocator, "; uintptr_t mc_range_len_{d} = ", .{id});
     switch (base.result_ty) {
         .array => |array| try out.print(allocator, "{d}", .{array.length.?}),
-        .pointer, .slice => {
-            try emitExpression(allocator, out, body, operation.base, depth + 1);
-            try out.appendSlice(allocator, ".len");
-        },
+        .pointer, .slice => try out.print(allocator, "mc_range_base_{d}.len", .{id}),
         else => return error.InvalidExpression,
     }
     if (operation.checked) try out.print(
@@ -2499,12 +2521,12 @@ fn emitRangeSlice(
     try out.appendSlice(allocator, "; (");
     try appendSliceCType(allocator, out, expression.result_ty);
     try out.print(allocator, "){{ .ptr = ", .{});
-    try emitExpression(allocator, out, body, operation.base, depth + 1);
-    try out.appendSlice(allocator, switch (base.result_ty) {
-        .array => ".elems",
-        .pointer, .slice => ".ptr",
-        else => return error.InvalidExpression,
-    });
+    if (bind_base) {
+        try out.print(allocator, "mc_range_base_{d}.ptr", .{id});
+    } else {
+        try emitExpression(allocator, out, body, operation.base, depth + 1);
+        try out.appendSlice(allocator, ".elems");
+    }
     try out.print(
         allocator,
         " + mc_range_start_{d}, .len = mc_range_end_{d} - mc_range_start_{d} }}; }})",

@@ -113,12 +113,6 @@
       "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_expression` in `tick_elapsed` (declined by mir-build)."
     },
     {
-      "fixture": "slice_ranges.mc",
-      "stage": "EMIT",
-      "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support expression `range_slice` in `accept_slice_range_from_struct_field` (declined by capability)."
-    },
-    {
       "fixture": "traits_dyn_accept.mc",
       "stage": "EMIT",
       "reason": "E_EXPERIMENTAL_DYN_CODEGEN",
