@@ -316,6 +316,7 @@ const storageElementTypeAlias = mir_type.storageElementTypeAlias;
 const structLiteralField = mir_facade.structLiteralField;
 const structLiteralFields = mir_facade.structLiteralFields;
 const structTypeNameAlias = mir_type.structTypeNameAlias;
+const ownedStructTypeNameAlias = mir_type.ownedStructTypeNameAlias;
 const suffixedIntegerLiteralTypeExpr = mir_facade.suffixedIntegerLiteralTypeExpr;
 const switchBoolLiteralValue = mir_facade.switchBoolLiteralValue;
 const switchCoversAllMirEnumCases = mir_facade.switchCoversAllMirEnumCases;
@@ -15081,7 +15082,7 @@ pub const FunctionBuilder = struct {
     fn discardArgumentDropGlueIdentity(self: *FunctionBuilder, argument: ast.Expr) ?DiscardDropGlueIdentity {
         const root = directIdentName(argument) orelse return null;
         const ty = self.local_type_exprs.get(root) orelse self.global_type_exprs.get(root) orelse return null;
-        const type_name = structTypeNameAlias(ty, self.aliases) orelse ast_query.typeName(ty) orelse return null;
+        const type_name = ownedStructTypeNameAlias(ty, self.aliases) orelse ast_query.typeName(ty) orelse return null;
         return self.dropGlueIdentityForTypeName(type_name);
     }
 
@@ -15113,7 +15114,7 @@ pub const FunctionBuilder = struct {
 
     fn localRootTypeSymbol(self: *FunctionBuilder, name: []const u8) SymbolId {
         const ty = self.local_type_exprs.get(name) orelse self.global_type_exprs.get(name) orelse return .invalid;
-        const type_name = structTypeNameAlias(ty, self.aliases) orelse ast_query.typeName(ty) orelse return .invalid;
+        const type_name = ownedStructTypeNameAlias(ty, self.aliases) orelse ast_query.typeName(ty) orelse return .invalid;
         return self.typeOwnershipSymbolForTypeName(type_name);
     }
 
@@ -15129,7 +15130,7 @@ pub const FunctionBuilder = struct {
 
     fn localDropGlueIdentity(self: *FunctionBuilder, name: []const u8) ?DiscardDropGlueIdentity {
         const ty = self.local_type_exprs.get(name) orelse self.global_type_exprs.get(name) orelse return null;
-        const type_name = structTypeNameAlias(ty, self.aliases) orelse ast_query.typeName(ty) orelse return null;
+        const type_name = ownedStructTypeNameAlias(ty, self.aliases) orelse ast_query.typeName(ty) orelse return null;
         return self.dropGlueIdentityForTypeName(type_name);
     }
 

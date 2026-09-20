@@ -61,8 +61,8 @@
     {
       "fixture": "move_borrow_escape.mc",
       "stage": "EMIT",
-      "reason": "InvalidMirOwnershipEvents",
-      "note": "MIR ownership-event admission rejects the kept chunk's move/borrow sequence. Stripping the fixture's EXPECT_ERROR declarations can leave a move-typed definition whose consuming or auto-drop event no longer has its matching partner."
+      "reason": "E_BACKEND_UNSUPPORTED",
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_cleanup_action` in `accept_dynamic_multi_array_elem_assign_before_move` (declined by mir-build)."
     },
     {
       "fixture": "move_cfg.mc",
@@ -72,12 +72,6 @@
     },
     {
       "fixture": "move_diverge.mc",
-      "stage": "EMIT",
-      "reason": "InvalidMirOwnershipEvents",
-      "note": "MIR ownership-event admission rejects the kept chunk's move/borrow sequence. Stripping the fixture's EXPECT_ERROR declarations can leave a move-typed definition whose consuming or auto-drop event no longer has its matching partner."
-    },
-    {
-      "fixture": "move_linear.mc",
       "stage": "EMIT",
       "reason": "InvalidMirOwnershipEvents",
       "note": "MIR ownership-event admission rejects the kept chunk's move/borrow sequence. Stripping the fixture's EXPECT_ERROR declarations can leave a move-typed definition whose consuming or auto-drop event no longer has its matching partner."

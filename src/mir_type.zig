@@ -603,6 +603,27 @@ fn structTypeNameAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(
     };
 }
 
+/// The struct type a local of this type OWNS, or null if it owns none.
+///
+/// Unlike `structTypeNameAlias`, this does not look through a pointer: `*T`
+/// borrows a `T`, it is not one. A local that is only a borrow has no
+/// ownership obligation of its own -- it may be reassigned to point somewhere
+/// else, and it never drops what it points at -- so treating it as owning its
+/// pointee makes the ownership-event sequence describe a resource that is not
+/// there.
+pub fn ownedStructTypeNameAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+    return ownedStructTypeNameAliasDepth(ty, aliases, 0);
+}
+
+fn ownedStructTypeNameAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) ?[]const u8 {
+    if (depth > 64) return null;
+    return switch (ty.kind) {
+        .name => |name| if (aliases.get(name.text)) |resolved| ownedStructTypeNameAliasDepth(resolved, aliases, depth + 1) else name.text,
+        .qualified => |node| ownedStructTypeNameAliasDepth(node.child.*, aliases, depth + 1),
+        else => null,
+    };
+}
+
 pub fn isDynTraitTypeAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     return isDynTraitTypeAliasDepth(ty, aliases, 0);
 }
