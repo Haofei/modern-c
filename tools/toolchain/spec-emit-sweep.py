@@ -14,7 +14,7 @@ Defaults: MCC_UNDER_TEST when set, otherwise zig-out/bin/mcc, tests/spec. Exit s
 fixture fails to emit or compile.
 """
 import sys, os, re, glob, json, subprocess, tempfile, concurrent.futures
-from spec_sweep_lib import strip_expect_error  # shared comment-aware negative-fixture stripping
+from spec_sweep_lib import valid_program  # shared comment-aware negative-fixture stripping
 
 # Fixtures excluded from the C-emit sweep, each mapped to the reason it is not a
 # C-emission fixture in the first place. Every entry is a phase=sema / phase=parse
@@ -75,7 +75,13 @@ CLANG = ["clang", "--target=" + SWEEP_TRIPLE, "-ffreestanding",
 # chain, so the corpus fans out across cores (override with JOBS=N).
 def sweep_one(mcc, path):
     name = os.path.basename(path)
-    program = strip_expect_error(open(path).read())
+    # `valid_program`, not a bare EXPECT_ERROR strip: a spec fixture writes a
+    # callee it does not define as a bodyless `fn f(...);` prototype, which the
+    # frontend keeps but MIR drops, so a call to it has no signature to render.
+    # Normalizing it to `extern fn` -- exactly what the LLVM sweeps already do
+    # -- makes the chunk a whole program again. Without it the sweep reports a
+    # backend gap for something that is an artifact of its own stripping.
+    program = valid_program(open(path).read())
     kept = len(re.findall(r"\bfn\s+\w+", program))
 
     with tempfile.NamedTemporaryFile("w", suffix=".mc", delete=False) as tmp:
