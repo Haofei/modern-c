@@ -665,6 +665,14 @@ pub fn validateRepresentationFactsForLowering(module: Module) error{InvalidMirRe
         for (function.representation_facts) |fact| {
             if (!representationFactTypedIdentitiesValid(function, fact)) return error.InvalidMirRepresentationFacts;
             if (countMatchingRepresentationInstructions(function, fact) != 1) return error.InvalidMirRepresentationFacts;
+            // A `representation_use` fact carries the typed use context its
+            // instruction spells in `detail`, and nothing else does. Without
+            // this a consumer reading `fact.use` would silently fall back to
+            // the string it is replacing.
+            if ((fact.kind == .representation_use) != (fact.use != null)) return error.InvalidMirRepresentationFacts;
+            if (fact.use) |use| {
+                if (!std.mem.eql(u8, @tagName(use), fact.detail)) return error.InvalidMirRepresentationFacts;
+            }
         }
     }
 }

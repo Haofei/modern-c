@@ -117,6 +117,7 @@ const PointerProvenanceInvalidationReason = mir_model.PointerProvenanceInvalidat
 const PointerShape = mir_model.PointerShape;
 const RangeFact = mir_model.RangeFact;
 const RepresentationFact = mir_model.RepresentationFact;
+const RepresentationUseKind = mir_model.RepresentationUseKind;
 const SignatureTypeId = mir_model.SignatureTypeId;
 const SignatureTypeTable = mir_model.SignatureTypeTable;
 const SourceId = mir_model.SourceId;
@@ -5115,6 +5116,23 @@ pub const FunctionBuilder = struct {
     // The identity of the most recently emitted instruction, so a fact
     // appended right after `addInstr` can name it.
     last_inst_id: InstId = .invalid,
+    // Build-time rendezvous between the two bodies. The typed expression for
+    // a source expression is built when its enclosing statement is lowered;
+    // the `expr` instruction for the same source expression is emitted later,
+    // walking the same AST node. This maps the AST node's source point to the
+    // first typed expression built from it, so `buildExpr` can record the
+    // identity join (`ExecutableExpression.inst_id`) when it emits.
+    //
+    // First-wins is the rule, and it is the right one: wrappers such as a
+    // representation check carry the operand's span, and the operand is the
+    // expression the instruction computes. Nothing downstream keys on a
+    // source point; the join that survives into MIR is the InstId.
+    executable_expr_by_source: std.AutoHashMap(SourcePoint, ExprId),
+    // A source expression the typed form folds away into its parent still has
+    // an `expr` instruction of its own. `-1` is one typed `signed_integer`
+    // literal, so the inner literal has no node; this carries its source point
+    // to the append so that node answers for both.
+    executable_folded_operand_source: ?SourcePoint = null,
     // Identity counter for resolved access facts, for the same reason: their
     // one-fact-per-access rule cannot be checked on a span that repeats.
     next_access_id: usize = 0,
@@ -5218,6 +5236,7 @@ pub const FunctionBuilder = struct {
             .executable_boolean_branches = .empty,
             .executable_local_ids = std.StringHashMap(LocalId).init(allocator),
             .executable_symbol_ids = std.StringHashMap(SymbolId).init(allocator),
+            .executable_expr_by_source = std.AutoHashMap(SourcePoint, ExprId).init(allocator),
             .executable_supported = true,
             .address_taken = std.StringHashMap(void).init(allocator),
             .local_types = std.StringHashMap(ValueType).init(allocator),
@@ -5419,6 +5438,7 @@ pub const FunctionBuilder = struct {
             .executable_boolean_branches = .empty,
             .executable_local_ids = std.StringHashMap(LocalId).init(allocator),
             .executable_symbol_ids = std.StringHashMap(SymbolId).init(allocator),
+            .executable_expr_by_source = std.AutoHashMap(SourcePoint, ExprId).init(allocator),
             .executable_supported = false,
             .address_taken = std.StringHashMap(void).init(allocator),
             .local_types = std.StringHashMap(ValueType).init(allocator),
@@ -5504,6 +5524,7 @@ pub const FunctionBuilder = struct {
         self.executable_boolean_branches.deinit(self.allocator);
         self.executable_local_ids.deinit();
         self.executable_symbol_ids.deinit();
+        self.executable_expr_by_source.deinit();
         self.proven_facts.deinit(self.allocator);
         self.address_taken.deinit();
         self.local_types.deinit();
@@ -5650,6 +5671,8 @@ pub const FunctionBuilder = struct {
         self.executable_terminator_cleanups = std.AutoHashMap(usize, []const CleanupActionId).init(self.allocator);
         self.executable_loop_targets.deinit(self.allocator);
         self.executable_loop_targets = .empty;
+        self.executable_expr_by_source.deinit();
+        self.executable_expr_by_source = std.AutoHashMap(SourcePoint, ExprId).init(self.allocator);
         var result: Function = .{
             .name = self.name,
             .return_ty = self.return_ty,
@@ -8429,8 +8452,10 @@ pub const FunctionBuilder = struct {
                 break :enum_literal .{ .literal = canonical };
             },
             .unary => |node| unary: {
-                if (node.op == .neg) if (canonicalNegatedIntegerLiteral(node.expr.*, result_ty)) |value|
+                if (node.op == .neg) if (canonicalNegatedIntegerLiteral(node.expr.*, result_ty)) |value| {
+                    self.executable_folded_operand_source = self.sourcePoint(node.expr.*.span);
                     break :unary .{ .literal = .{ .signed_integer = value } };
+                };
                 break :unary .{ .unary = .{
                     .op = executableUnaryOp(node.op),
                     .operand = try self.ensureExecutableExprAs(node.expr.*, result_ty),
@@ -9513,6 +9538,15 @@ pub const FunctionBuilder = struct {
             .type_id = type_id,
             .operation = operation,
         });
+        {
+            const rendezvous = try self.executable_expr_by_source.getOrPut(source);
+            if (!rendezvous.found_existing) rendezvous.value_ptr.* = id;
+            if (self.executable_folded_operand_source) |folded| {
+                self.executable_folded_operand_source = null;
+                const folded_rendezvous = try self.executable_expr_by_source.getOrPut(folded);
+                if (!folded_rendezvous.found_existing) folded_rendezvous.value_ptr.* = id;
+            }
+        }
         const representation_check_kind: ?mir_model.ExecutableRepresentationCheckKind = switch (result_ty) {
             .cstr => switch (operation) {
                 .local => switch (expr.kind) {
@@ -10556,6 +10590,22 @@ pub const FunctionBuilder = struct {
         statement.inst_id = inst_id;
     }
 
+    /// Name the instruction just emitted on the typed expression built from
+    /// the same source expression, so a consumer holding the instruction can
+    /// reach `ExecutableExpression.operation` instead of classifying
+    /// `Instruction.detail`.
+    ///
+    /// Recorded once per node: an expression already joined keeps its first
+    /// instruction, which is what keeps the join single-valued.
+    fn linkExecutableExpressionForExpr(self: *FunctionBuilder, expr: ast.Expr) void {
+        if (!self.last_inst_id.isValid()) return;
+        const id = self.executable_expr_by_source.get(self.sourcePoint(expr.span)) orelse return;
+        if (!id.isValid() or id.index() >= self.executable_expressions.items.len) return;
+        const node = &self.executable_expressions.items[id.index()];
+        if (node.inst_id.isValid()) return;
+        node.inst_id = self.last_inst_id;
+    }
+
     /// Link the statement appended most recently to the instruction emitted
     /// most recently. Both are the current source statement.
     fn linkLastExecutableStatementToLastInstruction(self: *FunctionBuilder) void {
@@ -11223,7 +11273,7 @@ pub const FunctionBuilder = struct {
         try self.addTargetRepresentationCheck(target_ty, initializer, initializer.span);
         try self.addAggregateConversionChecks(ty, initializer, .initializer);
         try self.buildExpr(initializer);
-        try self.addRepresentationUseForValue(target_ty, "initializer", initializer.span, exprText(initializer));
+        try self.addRepresentationUseForValue(target_ty, .initializer, initializer.span, exprText(initializer));
         self.assignment_target = previous_target;
         self.assignment_target_ty = previous_target_ty;
         self.assignment_target_type_expr = previous_target_type_expr;
@@ -11429,7 +11479,7 @@ pub const FunctionBuilder = struct {
                     if (local.ty != null) try self.addTargetRepresentationCheck(ty, expr, expr.span);
                     if (local.ty) |local_ty| try self.addAggregateConversionChecks(local_ty, expr, .initializer);
                     try self.buildExpr(expr);
-                    if (local.ty != null) try self.addRepresentationUseForValue(ty, "initializer", expr.span, exprText(expr));
+                    if (local.ty != null) try self.addRepresentationUseForValue(ty, .initializer, expr.span, exprText(expr));
                     try self.recordPointerProvenanceForLocalInitializer(local.names, ty_expr, ty, expr);
                     try self.recordAggregatePointerFieldProvenanceForLocalInitializer(local.names, ty_expr, expr);
                     try self.recordLocalFunctionAliases(local.names, expr);
@@ -11544,7 +11594,7 @@ pub const FunctionBuilder = struct {
                 try self.addTargetRepresentationCheck(self.assignment_target_ty, node.value, node.value.span);
                 if (assignment_target_type_expr) |target_ty| try self.addAggregateConversionChecks(target_ty, node.value, .assignment);
                 try self.buildExpr(node.value);
-                try self.addRepresentationUseForValue(self.assignment_target_ty, "assignment", node.value.span, exprText(node.value));
+                try self.addRepresentationUseForValue(self.assignment_target_ty, .assignment, node.value.span, exprText(node.value));
                 try self.recordPointerProvenanceForAssignment(node.target, node.value, stmt.span);
                 try self.recordLocalFunctionAliasAssignment(node.target, node.value);
                 try self.recordLocalAggregatePointerAliasAssignment(node.target, node.value);
@@ -12163,7 +12213,7 @@ pub const FunctionBuilder = struct {
         try self.appendExecutableStatement(self.sourcePoint(span), .{ .guard = .{ .kind = .switch_, .condition = executable_subject } });
         self.linkExecutableStatement(switch_guard_id, switch_subject_inst_id);
         try self.buildExpr(node.subject);
-        try self.addRepresentationUseForExpr("switch_subject", node.subject);
+        try self.addRepresentationUseForExpr(.switch_subject, node.subject);
         try self.addSwitchPatternChecks(node);
 
         const dispatch_id = self.current;
@@ -13195,29 +13245,34 @@ pub const FunctionBuilder = struct {
                     }
                 }
                 try self.addInstrWithValue(.expr, exprText(expr), ty, expr.span, exprText(expr));
+                self.linkExecutableExpressionForExpr(expr);
             },
             .int_literal => {
                 if (integerLiteralFitsTarget(self.assignment_target_ty, expr)) {
                     try self.addIntegerLiteralFact(self.assignment_target_ty, expr, expr.span);
                 }
                 try self.addInstr(.expr, exprText(expr), self.exprType(expr), expr.span);
+                self.linkExecutableExpressionForExpr(expr);
                 const instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
                 instruction.constant_usize_value = self.constUsizeValue(expr);
             },
             .bool_literal => {
                 try self.addInstr(.expr, exprText(expr), self.exprType(expr), expr.span);
+                self.linkExecutableExpressionForExpr(expr);
             },
             .float_literal => {
                 // The instruction is emitted first so its fact can name it by
                 // identity rather than by span.
                 const float_target_ty = self.assignment_target_ty;
                 try self.addInstr(.expr, exprText(expr), self.exprType(expr), expr.span);
+                self.linkExecutableExpressionForExpr(expr);
                 if (float_target_ty != .unknown) {
                     try self.addFloatLiteralFact(float_target_ty, expr, expr.span);
                 }
             },
             .string_literal, .char_literal, .null_literal, .uninit_literal, .void_literal, .enum_literal => {
                 try self.addInstr(.expr, exprText(expr), self.exprType(expr), expr.span);
+                self.linkExecutableExpressionForExpr(expr);
             },
             .array_literal => |items| {
                 const array_ty: ValueType = if (self.assignment_target_ty == .array)
@@ -13225,6 +13280,7 @@ pub const FunctionBuilder = struct {
                 else
                     .{ .array = .{ .child = "unknown", .length = items.len } };
                 try self.addInstr(.expr, "array_literal", array_ty, expr.span);
+                self.linkExecutableExpressionForExpr(expr);
                 if (items.len <= Instruction.max_aggregate_operands) {
                     const instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
                     instruction.typed_aggregate_operand_count = items.len;
@@ -13247,6 +13303,7 @@ pub const FunctionBuilder = struct {
             },
             .struct_literal => |fields| {
                 try self.addInstr(.expr, "struct_literal", .value, expr.span);
+                self.linkExecutableExpressionForExpr(expr);
                 const struct_name = if (self.aggregateLiteralTargetTypeExpr()) |target_ty| structTypeNameAlias(aggregateTargetTypeAlias(target_ty, self.aliases), self.aliases) else null;
                 if (fields.len <= Instruction.max_aggregate_operands) if (struct_name) |name| {
                     var field_indices: [Instruction.max_aggregate_operands]usize = undefined;
@@ -13352,7 +13409,7 @@ pub const FunctionBuilder = struct {
                     try self.addRuntimeRepresentationCheck(ty, expr.span, exprText(expr));
                 }
                 try self.buildExpr(inner.*);
-                if (!isRawManyPointerValue(inner_ty)) try self.addRepresentationUseForExpr("deref_base", inner.*);
+                if (!isRawManyPointerValue(inner_ty)) try self.addRepresentationUseForExpr(.deref_base, inner.*);
             },
             .try_expr => |inner| {
                 const inner_ty = self.exprType(inner.operand.*);
@@ -13389,7 +13446,7 @@ pub const FunctionBuilder = struct {
                         null;
                     try self.buildExprWithTargetType(mapped.*, mapped_ty);
                 }
-                try self.addRepresentationUseForValue(try_ty, "try_unwrap", expr.span, exprText(expr));
+                try self.addRepresentationUseForValue(try_ty, .try_unwrap, expr.span, exprText(expr));
             },
             .block => |block| _ = try self.buildBlock(block),
             .unary => |node| {
@@ -13437,9 +13494,9 @@ pub const FunctionBuilder = struct {
                 const left_target_ty = if (exprContainsTargetTypedLiteral(node.left.*)) self.typeExprForExpr(node.right.*) orelse self.simpleTypeExprForValueType(self.exprType(node.right.*), node.left.*.span) orelse self.assignment_target_type_expr else null;
                 const right_target_ty = if (exprContainsTargetTypedLiteral(node.right.*)) self.typeExprForExpr(node.left.*) orelse self.simpleTypeExprForValueType(self.exprType(node.left.*), node.right.*.span) orelse self.assignment_target_type_expr else null;
                 try self.buildExprWithTargetType(node.left.*, left_target_ty);
-                try self.addRepresentationUseForExpr("binary_operand", node.left.*);
+                try self.addRepresentationUseForExpr(.binary_operand, node.left.*);
                 try self.buildExprWithTargetType(node.right.*, right_target_ty);
-                try self.addRepresentationUseForExpr("binary_operand", node.right.*);
+                try self.addRepresentationUseForExpr(.binary_operand, node.right.*);
             },
             .cast => |node| {
                 const cast_target = valueTypeFromTypeAlias(node.ty.*, self.enums, self.structs, self.packed_bits, self.aliases);
@@ -13460,6 +13517,7 @@ pub const FunctionBuilder = struct {
                     try self.addRuntimeRepresentationCheck(cast_target, expr.span, exprText(expr));
                 }
                 try self.addInstr(.expr, "cast", valueTypeFromTypeAlias(node.ty.*, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
+                self.linkExecutableExpressionForExpr(expr);
                 if (self.semantic_expr_depth == 1) {
                     try self.addAggregateRangeFactForUncheckedExpr(self.assignment_target orelse "value", expr);
                 }
@@ -13967,7 +14025,7 @@ pub const FunctionBuilder = struct {
                             self.assignment_target_ty = param_ty;
                             self.assignment_target_type_expr = summary.params[index].ty;
                             try self.buildExpr(arg);
-                            try self.addRepresentationUseForValue(param_ty, "call_arg", arg.span, exprText(arg));
+                            try self.addRepresentationUseForValue(param_ty, .call_arg, arg.span, exprText(arg));
                             self.assignment_target = previous_target;
                             self.assignment_target_ty = previous_target_ty;
                             self.assignment_target_type_expr = previous_target_type_expr;
@@ -14092,6 +14150,7 @@ pub const FunctionBuilder = struct {
                     // enum uses, but do not create a runtime trap edge.
                     const ty = self.exprType(expr);
                     try self.addInstr(.expr, node.name.text, ty, expr.span);
+                    self.linkExecutableExpressionForExpr(expr);
                     try self.addInstrWithValue(.representation_check, representationTypeName(ty), ty, expr.span, exprText(expr));
                     return;
                 }
@@ -14104,6 +14163,7 @@ pub const FunctionBuilder = struct {
                     try self.addRuntimeRepresentationCheck(ty, expr.span, exprText(expr));
                 }
                 try self.addInstr(.expr, node.name.text, ty, expr.span);
+                self.linkExecutableExpressionForExpr(expr);
                 if (self.memberFieldIndex(node)) |field_index| {
                     const instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
                     instruction.typed_base_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.base.*).span));
@@ -16493,16 +16553,23 @@ pub const FunctionBuilder = struct {
         try self.addInstrWithValue(.representation_check, representationTypeName(target_ty), target_ty, span, exprText(expr));
     }
 
-    fn addRepresentationUseForValue(self: *FunctionBuilder, target_ty: ValueType, detail: []const u8, span: ast.Span, value_id: []const u8) !void {
+    /// Emit a `representation_use` instruction and record its use context on
+    /// the fact the instruction's identity joins to. `use` is the authority;
+    /// the instruction's `detail` string is rendered from it.
+    fn addRepresentationUseForValue(self: *FunctionBuilder, target_ty: ValueType, use: RepresentationUseKind, span: ast.Span, value_id: []const u8) !void {
         if (representationCheckKind(target_ty) == null) return;
         if (std.mem.eql(u8, value_id, "uninit")) return;
-        try self.addInstrWithValue(.representation_use, detail, target_ty, span, value_id);
+        try self.addInstrWithValue(.representation_use, @tagName(use), target_ty, span, value_id);
+        if (self.representation_facts.items.len != 0) {
+            const fact = &self.representation_facts.items[self.representation_facts.items.len - 1];
+            if (fact.typed_inst_id.eql(self.last_inst_id)) fact.use = use;
+        }
     }
 
-    fn addRepresentationUseForExpr(self: *FunctionBuilder, detail: []const u8, expr: ast.Expr) !void {
+    fn addRepresentationUseForExpr(self: *FunctionBuilder, use: RepresentationUseKind, expr: ast.Expr) !void {
         const ty = self.exprType(expr);
         if (representationCheckKind(ty) == null) return;
-        try self.addRepresentationUseForValue(ty, detail, expr.span, exprText(expr));
+        try self.addRepresentationUseForValue(ty, use, expr.span, exprText(expr));
     }
 
     fn exprNeedsTargetRepresentationCheck(self: *FunctionBuilder, expr: ast.Expr) bool {
@@ -16567,7 +16634,7 @@ pub const FunctionBuilder = struct {
                     try self.addConversionCheck(child_value_ty, item, ctx, item.span);
                     try self.addResultPayloadConversionCheck(child_value_ty, item, item.span);
                     try self.addTargetRepresentationCheck(child_value_ty, item, item.span);
-                    if (self.exprNeedsTargetRepresentationCheck(item)) try self.addRepresentationUseForValue(child_value_ty, "aggregate_element", item.span, exprText(item));
+                    if (self.exprNeedsTargetRepresentationCheck(item)) try self.addRepresentationUseForValue(child_value_ty, .aggregate_element, item.span, exprText(item));
                     try self.addAggregateRangeFactForUncheckedExpr("aggregate_element", item);
                     try self.addAggregateConversionChecks(child_ty, item, ctx);
                 }
@@ -16582,7 +16649,7 @@ pub const FunctionBuilder = struct {
                     try self.addConversionCheck(field_value_ty, field.value, ctx, field.value.span);
                     try self.addResultPayloadConversionCheck(field_value_ty, field.value, field.value.span);
                     try self.addTargetRepresentationCheck(field_value_ty, field.value, field.value.span);
-                    if (self.exprNeedsTargetRepresentationCheck(field.value)) try self.addRepresentationUseForValue(field_value_ty, "aggregate_field", field.value.span, exprText(field.value));
+                    if (self.exprNeedsTargetRepresentationCheck(field.value)) try self.addRepresentationUseForValue(field_value_ty, .aggregate_field, field.value.span, exprText(field.value));
                     try self.addAggregateRangeFactForUncheckedExpr(field.name.text, field.value);
                     try self.addAggregateConversionChecks(field_ty, field.value, ctx);
                 }

@@ -87,18 +87,19 @@ backends off syntax, is described in
 
 ### Note: the `Instruction.detail` readers that are left
 
-`mir_build.zig` and `mir_body_plan.zig` no longer classify instructions by
-their `detail` string. Three readers remain, and each is blocked on something
-specific rather than on effort:
+`mir_build.zig`, `mir_body_plan.zig` and `lower_c_map.zig` no longer classify
+instructions by their `detail` string. One real reader remains:
 
-- **`lower_c_map.zig`** labels source-map rows. Its `target_type` reads have a
-  typed counterpart (`TargetTypeFact.kind`, joined on `typed_inst_id`), but
-  its other three do not: `RepresentationFact.detail` is the same string the
-  instruction carries, the `binary switch_subject` marker has no fact at all
-  (the `.switch_subject` target-type fact names its own `target_type`
-  instruction), and the `expr` arm reads the literal's spelling, which only
-  `ExecutableExpression.operation` models. Converting two of five would leave
-  the file on both sides of the boundary, so it waits for the join below.
+- **`lower_c_map.zig`** is off `detail` for row labelling. It reads
+  `TargetTypeFact.kind` and the new `RepresentationFact.use`, and crosses the
+  instruction-to-typed-node join for the rest: a `binary` instruction is a
+  switch subject when the `guard` statement that realizes it says `.switch_`,
+  and an `expr` instruction's syntactic class is its typed expression's
+  `operation`. The only `detail` left in the file prints the field verbatim
+  into the MIR digest, which is a dump of the stream, not a reader of it.
+  Labels got *more* accurate in the move: the string test misread a parameter
+  named `int` as an integer literal, and never recognised a boolean literal at
+  all (`exprText` spells it `bool`).
 - **`mir_build.zig`'s `addCallTargetFact`** checks that the instruction it just
   emitted really is the `call_target` the fact claims. That is a cross-check
   *between* the two representations; it should go when the stream does.
@@ -106,7 +107,9 @@ specific rather than on effort:
   inside `test {}` blocks, where they hand-build an `Instruction`. Nothing to
   move: they are test-only consumers.
 
-The join `lower_c_map.zig` was waiting on now exists: `ExecutableStatement` and
+The join that unblocked `lower_c_map.zig`:
+
+`ExecutableStatement` and
 `ExecutableExpression` carry `inst_id`, the identity of the instruction the
 node replaces, and `mir_verify.validateExecutableBodyJoinForLowering` proves it
 resolves, is single-valued, and is total on the statement-shaped instruction

@@ -273,6 +273,13 @@ fn sourceMapKindName(kind: mir.SourceMapDeclarationKind) []const u8 {
     };
 }
 
+/// Label one MIR instruction's source-map row.
+///
+/// Every classification here comes from the typed body or from a typed fact
+/// joined to the instruction by identity; none of it reads
+/// `Instruction.detail`. A backend labelling rows off a string the front end
+/// happens to have written into the stream is the duplicate authority the
+/// typed body exists to remove, even when the answer is only presentation.
 fn sourceMapKindForMirInstruction(function: mir.Function, instruction: mir.Instruction) ?[]const u8 {
     return switch (instruction.kind) {
         .local => "let_decl",
@@ -281,9 +288,12 @@ fn sourceMapKindForMirInstruction(function: mir.Function, instruction: mir.Instr
         .return_value => "return",
         .assert_condition => "assert",
         .asm_effect => "asm_stmt",
-        .binary => if (std.mem.eql(u8, instruction.detail, "switch_subject"))
+        // A `binary` instruction heads a control-flow construct or computes a
+        // value. Which construct is a question the typed body answers: the
+        // `guard` statement joined to this instruction names its kind.
+        .binary => if (sourceMapGuardKind(function, instruction) == .switch_)
             "switch_subject_expr"
-        else if (std.mem.eql(u8, instruction.result_ty.name(), "branch"))
+        else if (instruction.result_ty == .branch)
             "if_let_value_expr"
         else
             "expr_binary",
@@ -291,19 +301,30 @@ fn sourceMapKindForMirInstruction(function: mir.Function, instruction: mir.Instr
         .call, .indirect_call => "expr_call",
         .index => "expr_index",
         .typed_load => "expr_deref",
-        .expr => sourceMapExprKind(instruction.detail),
-        .representation_use => if (std.mem.eql(u8, instruction.detail, "initializer"))
-            "initializer_expr"
-        else if (std.mem.eql(u8, instruction.detail, "assignment"))
-            "assignment_value_expr"
-        else
-            "expr",
-        .target_type => if (std.mem.eql(u8, instruction.detail, "expression_result"))
-            expressionResultSourceMapKind(function, instruction)
-        else if (std.mem.eql(u8, instruction.detail, "loop_condition"))
-            "while_condition_expr"
-        else
-            null,
+        .expr => sourceMapExprKind(function, instruction),
+        .representation_use => switch (mir.representationUseForInstruction(function, instruction) orelse return "expr") {
+            .initializer => "initializer_expr",
+            .assignment => "assignment_value_expr",
+            else => "expr",
+        },
+        .target_type => switch (mir.targetTypeKindForInstruction(function, instruction) orelse return null) {
+            .expression_result => expressionResultSourceMapKind(function, instruction),
+            .loop_condition => "while_condition_expr",
+            else => null,
+        },
+        else => null,
+    };
+}
+
+/// The kind of the `guard` statement that realizes this instruction, if the
+/// typed body realizes it as one.
+fn sourceMapGuardKind(
+    function: mir.Function,
+    instruction: mir.Instruction,
+) ?@FieldType(@FieldType(mir.ExecutableStatement.Operation, "guard"), "kind") {
+    const statement = mir.executableStatementForInstruction(&function.executable_body, instruction.typed_inst_id) orelse return null;
+    return switch (statement.operation) {
+        .guard => |guard| guard.kind,
         else => null,
     };
 }
@@ -330,14 +351,26 @@ fn functionHasInstructionOnRenderedLine(function: mir.Function, kind: mir.Instru
     return false;
 }
 
-fn sourceMapExprKind(detail: []const u8) []const u8 {
-    if (std.mem.eql(u8, detail, "array_literal")) return "expr_array_literal";
-    if (std.mem.eql(u8, detail, "struct_literal")) return "expr_struct_literal";
-    if (std.mem.eql(u8, detail, "cast")) return "expr_cast";
-    if (std.mem.eql(u8, detail, "int")) return "expr_int_literal";
-    if (std.mem.eql(u8, detail, "true") or std.mem.eql(u8, detail, "false")) return "expr_bool_literal";
-    if (detail.len != 0 and detail[0] >= '0' and detail[0] <= '9') return "expr_int_literal";
-    return "expr_ident";
+/// The syntactic class of the expression an `expr` instruction computes,
+/// read from the typed expression that realizes it.
+///
+/// An instruction with no typed counterpart -- a switch arm's pattern marker,
+/// an assignment target's operand -- is an identifier-shaped row, which is
+/// also what the instruction stream said about it.
+fn sourceMapExprKind(function: mir.Function, instruction: mir.Instruction) []const u8 {
+    const expression = mir.executableExpressionForInstruction(&function.executable_body, instruction.typed_inst_id) orelse
+        return "expr_ident";
+    return switch (expression.operation) {
+        .array => "expr_array_literal",
+        .struct_ => "expr_struct_literal",
+        .cast => "expr_cast",
+        .literal => |literal| switch (literal) {
+            .integer, .signed_integer => "expr_int_literal",
+            .boolean => "expr_bool_literal",
+            else => "expr_ident",
+        },
+        else => "expr_ident",
+    };
 }
 
 fn typedIndexOrMax(index: anytype) usize {

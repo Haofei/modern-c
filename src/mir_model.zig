@@ -2384,6 +2384,26 @@ pub fn instructionJoinsExecutableBody(instruction: Instruction) bool {
     };
 }
 
+/// The kind recorded for a `target_type` instruction, found by the
+/// instruction-identity join its fact already carries.
+pub fn targetTypeKindForInstruction(function: Function, instruction: Instruction) ?TargetTypeKind {
+    if (!instruction.typed_inst_id.isValid()) return null;
+    for (function.target_type_facts) |fact| {
+        if (fact.typed_inst_id.eql(instruction.typed_inst_id)) return fact.kind;
+    }
+    return null;
+}
+
+/// The use context recorded for a `representation_use` instruction, found by
+/// the instruction-identity join its fact already carries.
+pub fn representationUseForInstruction(function: Function, instruction: Instruction) ?RepresentationUseKind {
+    if (!instruction.typed_inst_id.isValid()) return null;
+    for (function.representation_facts) |fact| {
+        if (fact.typed_inst_id.eql(instruction.typed_inst_id)) return fact.use;
+    }
+    return null;
+}
+
 /// The typed node that realizes `inst_id`, or `null` when there is none.
 pub fn executableNodeForInstruction(body: *const ExecutableBody, inst_id: InstId) ?ExecutableNode {
     if (!inst_id.isValid()) return null;
@@ -4067,9 +4087,32 @@ pub const AggregateReturnPointerFact = struct {
     source: SourcePoint,
 };
 
+/// Where a representation-sensitive value is used.
+///
+/// This is the typed form of what a `representation_use` instruction spells in
+/// its `detail` string, and it is the authority: `detail` is a rendering of
+/// this, exactly as `Instruction.detail` renders `TargetTypeFact.kind` for a
+/// `target_type` instruction. Tag names are the instruction spellings, so the
+/// stream's text is produced from the fact rather than restated beside it.
+pub const RepresentationUseKind = enum {
+    initializer,
+    assignment,
+    call_arg,
+    aggregate_element,
+    aggregate_field,
+    binary_operand,
+    deref_base,
+    switch_subject,
+    try_unwrap,
+};
+
 pub const RepresentationFact = struct {
     kind: Instruction.Kind,
     detail: []const u8,
+    /// The use context, for a fact describing a `representation_use`
+    /// instruction. A `representation_check` or `typed_load` fact describes a
+    /// check rather than a use and carries none.
+    use: ?RepresentationUseKind = null,
     result_ty: ValueType,
     typed_result_ty: TypeId = .invalid,
     typed_value_id: ValueId = .invalid,

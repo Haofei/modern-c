@@ -129,7 +129,16 @@ compiled with a function body's checks rather than a statement sequence.
 it from `CheckedCallableFact.kind` rather than guessing from the body's shape.
 
 The nine instruction-scoped fact families are unchanged by this: they continue
-to join on `typed_inst_id` with their own exactly-one invariants.
+to join on `typed_inst_id` with their own exactly-one invariants. One of them
+gained a typed field rather than a new join: `RepresentationFact.use` is a
+`RepresentationUseKind`, the typed form of what a `representation_use`
+instruction spells in `detail`, exactly as `TargetTypeFact.kind` is for a
+`target_type` instruction. The fact is the authority and the instruction's
+string is rendered from it; the verifier checks that correspondence, and that
+a `representation_use` fact is the only kind that carries a use.
+
+`src/lower_c_map.zig` is the first consumer: it labels every source-map row
+from the typed body or a typed fact, and reads no `detail` at all.
 
 ## The sema-to-MIR handoff
 
