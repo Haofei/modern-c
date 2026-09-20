@@ -13927,6 +13927,7 @@ pub const FunctionBuilder = struct {
                 }
             },
             .index => |node| {
+                const access_fact_index = self.access_facts.items.len;
                 try self.access_facts.append(self.allocator, .{ .index = .{
                     .result_ty = try self.resolvedAccessValueType(expr),
                     .base_ty = try self.resolvedAccessValueType(node.base.*),
@@ -13963,6 +13964,7 @@ pub const FunctionBuilder = struct {
                 }
                 const ty = self.exprType(expr);
                 try self.addInstr(.index, if (elide_bounds) "const_in_bounds" else "bounds_checked", ty, expr.span);
+                self.access_facts.items[access_fact_index].index.typed_inst_id = self.last_inst_id;
                 const index_instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
                 index_instruction.typed_base_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.base.*).span));
                 index_instruction.typed_index_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.index.*).span));
@@ -13987,6 +13989,7 @@ pub const FunctionBuilder = struct {
                 try self.buildExpr(node.index.*);
             },
             .slice => |node| {
+                const access_fact_index = self.access_facts.items.len;
                 try self.access_facts.append(self.allocator, .{ .range_slice = .{
                     .result_ty = try self.resolvedAccessValueType(expr),
                     .base_ty = try self.resolvedAccessValueType(node.base.*),
@@ -14022,6 +14025,7 @@ pub const FunctionBuilder = struct {
                     });
                 }
                 try self.addInstr(.index, if (elide_slice) "range_slice_const_in_bounds" else "range_slice", self.exprType(expr), expr.span);
+                self.access_facts.items[access_fact_index].range_slice.typed_inst_id = self.last_inst_id;
                 const slice_instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
                 slice_instruction.typed_base_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.base.*).span));
                 slice_instruction.typed_index_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.start.*).span));

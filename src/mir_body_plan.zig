@@ -259,14 +259,14 @@ fn verifyAccessFacts(function: *const mir.Function) !void {
             .index => |access| {
                 try verifyRequiredAccessSpan(function, access.base_span_id);
                 try verifyRequiredAccessSpan(function, access.index_span_id);
-                if (access.index_ty != .integer or !hasIndexInstruction(function, access.typed_span_id, access.result_ty, access.base_span_id, access.index_span_id)) return error.InvalidAccessFact;
+                if (access.index_ty != .integer or indexInstructionForFact(function, fact) == null) return error.InvalidAccessFact;
             },
             .range_slice => |access| {
                 try verifyRequiredAccessSpan(function, access.base_span_id);
                 try verifyRequiredAccessSpan(function, access.start_span_id);
                 try verifyRequiredAccessSpan(function, access.end_span_id);
                 if (!accessResultIsSlice(access.result_ty) or access.start_ty != .integer or access.end_ty != .integer or
-                    !hasRangeSliceInstruction(function, access.typed_span_id, access.result_ty, access.base_span_id, access.start_span_id)) return error.InvalidAccessFact;
+                    indexInstructionForFact(function, fact) == null) return error.InvalidAccessFact;
             },
             .address_of => |access| {
                 try verifyRequiredAccessSpan(function, access.operand_span_id);
@@ -290,14 +290,15 @@ fn verifyAccessFacts(function: *const mir.Function) !void {
             if (prior.accessId().eql(fact.accessId())) return error.DuplicateAccessFact;
         }
     }
+    // Every `index` instruction is described by exactly one fact, and the
+    // fact says which kind of access it is: an element read or a range slice
+    // by its `AccessFact`, a comptime projection by its `ConstGetFact`. Both
+    // join on the instruction's identity.
     for (function.blocks) |block| for (block.instructions) |instruction| {
         if (instruction.kind != .index) continue;
-        if (std.mem.eql(u8, instruction.detail, "const_get")) continue;
-        const present = if (std.mem.startsWith(u8, instruction.detail, "range_slice"))
-            rangeSliceFactForInstruction(function, instruction)
-        else
-            indexFactForInstruction(function, instruction);
-        if (!present) return error.InvalidAccessFact;
+        if (accessFactForInstruction(function, instruction) != null) continue;
+        if (constGetFactForInstruction(function, instruction)) continue;
+        return error.InvalidAccessFact;
     };
 }
 
@@ -313,42 +314,59 @@ fn accessResultIsSlice(ty: mir.ValueType) bool {
     };
 }
 
-fn hasIndexInstruction(function: *const mir.Function, span_id: mir.SpanId, result_ty: mir.ValueType, base_span_id: mir.SpanId, index_span_id: mir.SpanId) bool {
+/// The `index` instruction an access fact is realized by, found by identity
+/// and then checked for agreement on result type and operand spans.
+fn indexInstructionForFact(function: *const mir.Function, fact: mir.AccessFact) ?mir.Instruction {
+    const inst_id = accessFactInstId(fact) orelse return null;
+    if (!inst_id.isValid()) return null;
     for (function.blocks) |block| for (block.instructions) |instruction| {
-        if (instruction.kind == .index and instruction.typed_span_id.eql(span_id) and std.meta.eql(instruction.result_ty, result_ty) and
-            instruction.typed_base_operand_span_id.eql(base_span_id) and instruction.typed_index_operand_span_id.eql(index_span_id)) return true;
+        if (instruction.kind != .index or !instruction.typed_inst_id.eql(inst_id)) continue;
+        return if (accessFactAgreesWithInstruction(fact, instruction)) instruction else null;
     };
+    return null;
+}
+
+/// The access fact naming this `index` instruction, if there is one.
+fn accessFactForInstruction(function: *const mir.Function, instruction: mir.Instruction) ?mir.AccessFact {
+    if (!instruction.typed_inst_id.isValid()) return null;
+    for (function.access_facts) |fact| {
+        const inst_id = accessFactInstId(fact) orelse continue;
+        if (!inst_id.eql(instruction.typed_inst_id)) continue;
+        return if (accessFactAgreesWithInstruction(fact, instruction)) fact else null;
+    }
+    return null;
+}
+
+/// A comptime projection carries no access fact; its `ConstGetFact` is the
+/// one fact that describes it.
+fn constGetFactForInstruction(function: *const mir.Function, instruction: mir.Instruction) bool {
+    if (!instruction.typed_inst_id.isValid()) return false;
+    for (function.const_get_facts) |fact| {
+        if (fact.typed_inst_id.isValid() and fact.typed_inst_id.eql(instruction.typed_inst_id)) return true;
+    }
     return false;
 }
 
-fn hasRangeSliceInstruction(function: *const mir.Function, span_id: mir.SpanId, result_ty: mir.ValueType, base_span_id: mir.SpanId, start_span_id: mir.SpanId) bool {
-    for (function.blocks) |block| for (block.instructions) |instruction| {
-        if (instruction.kind == .index and std.mem.startsWith(u8, instruction.detail, "range_slice") and instruction.typed_span_id.eql(span_id) and std.meta.eql(instruction.result_ty, result_ty) and
-            instruction.typed_base_operand_span_id.eql(base_span_id) and instruction.typed_index_operand_span_id.eql(start_span_id)) return true;
+fn accessFactInstId(fact: mir.AccessFact) ?mir.InstId {
+    return switch (fact) {
+        .index => |access| access.typed_inst_id,
+        .range_slice => |access| access.typed_inst_id,
+        else => null,
     };
-    return false;
 }
 
-fn indexFactForInstruction(function: *const mir.Function, instruction: mir.Instruction) bool {
-    for (function.access_facts) |fact| switch (fact) {
-        .index => |access| if (access.typed_span_id.eql(instruction.typed_span_id) and
+fn accessFactAgreesWithInstruction(fact: mir.AccessFact, instruction: mir.Instruction) bool {
+    return switch (fact) {
+        .index => |access| access.typed_span_id.eql(instruction.typed_span_id) and
             std.meta.eql(access.result_ty, instruction.result_ty) and
             access.base_span_id.eql(instruction.typed_base_operand_span_id) and
-            access.index_span_id.eql(instruction.typed_index_operand_span_id)) return true,
-        else => {},
-    };
-    return false;
-}
-
-fn rangeSliceFactForInstruction(function: *const mir.Function, instruction: mir.Instruction) bool {
-    for (function.access_facts) |fact| switch (fact) {
-        .range_slice => |access| if (access.typed_span_id.eql(instruction.typed_span_id) and
+            access.index_span_id.eql(instruction.typed_index_operand_span_id),
+        .range_slice => |access| access.typed_span_id.eql(instruction.typed_span_id) and
             std.meta.eql(access.result_ty, instruction.result_ty) and
             access.base_span_id.eql(instruction.typed_base_operand_span_id) and
-            access.start_span_id.eql(instruction.typed_index_operand_span_id)) return true,
-        else => {},
+            access.start_span_id.eql(instruction.typed_index_operand_span_id),
+        else => false,
     };
-    return false;
 }
 
 fn accessFactSpanId(fact: mir.AccessFact) mir.SpanId {

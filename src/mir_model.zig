@@ -3374,6 +3374,11 @@ pub const AccessFact = union(enum) {
         base_ty: ValueType,
         index_ty: ValueType,
         typed_access_id: AccessId = .invalid,
+        /// The `index` instruction this access is realized by. A span does
+        /// not separate an element access from a range slice or a comptime
+        /// projection at the same expression; the instruction's identity
+        /// does. See `BoundsFact.typed_inst_id`.
+        typed_inst_id: InstId = .invalid,
         typed_span_id: SpanId,
         base_span_id: SpanId,
         index_span_id: SpanId,
@@ -3384,6 +3389,9 @@ pub const AccessFact = union(enum) {
         start_ty: ValueType,
         end_ty: ValueType,
         typed_access_id: AccessId = .invalid,
+        /// The `index` instruction this range slice is realized by; see
+        /// `AccessFact.index.typed_inst_id`.
+        typed_inst_id: InstId = .invalid,
         typed_span_id: SpanId,
         base_span_id: SpanId,
         start_span_id: SpanId,
