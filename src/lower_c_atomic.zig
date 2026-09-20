@@ -3,35 +3,13 @@
 //! Maps already-verified atomic orderings to C `__ATOMIC_*` constants.
 //!
 //! Function-body atomic rendering lives in `mir_executable_c.zig`.  This file
-//! remains only for shared ordering and inspection mechanics; it must not
-//! reopen AST call syntax to select an atomic operation.
+//! remains only for shared ordering mechanics; it must not reopen AST call
+//! syntax to select an atomic operation, and no longer can: it names no
+//! syntax type. The three helpers that read ordering arguments and asm
+//! clobbers out of the AST moved to `c_inspection.zig`, their only caller,
+//! which is an inspection surface rather than a lowering path.
 
 const std = @import("std");
-
-const ast_bridge = @import("ast_bridge.zig");
-
-pub fn orderingArg(args: []const ast_bridge.Expr) []const u8 {
-    for (args) |arg| {
-        if (arg.kind == .enum_literal) return arg.kind.enum_literal.text;
-    }
-    return "none";
-}
-
-pub fn atomicOrderingArg(args: []const ast_bridge.Expr, index: usize) []const u8 {
-    if (index >= args.len) return "none";
-    return switch (args[index].kind) {
-        .enum_literal => |literal| literal.text,
-        else => "none",
-    };
-}
-
-pub fn asmHasMemoryClobber(asm_stmt: ast_bridge.AsmStmt) bool {
-    if (asm_stmt.clobbers.len == 0) return true;
-    for (asm_stmt.clobbers) |clobber| {
-        if (std.mem.indexOf(u8, clobber, "memory") != null) return true;
-    }
-    return false;
-}
 
 pub fn atomicOrderCConstant(ordering: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, ordering, "relaxed")) return "__ATOMIC_RELAXED";

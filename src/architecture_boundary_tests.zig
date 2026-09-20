@@ -80,7 +80,6 @@ const exceptions = [_]Exception{
     .{ .file = "lower_c_aggregate_deps.zig", .import = "ast_bridge.zig", .why = "aggregate emission order still walks declaration syntax" },
     .{ .file = "lower_c_aggregate_deps.zig", .import = "type_bridge.zig", .why = "aggregate closure still inspects type syntax" },
     .{ .file = "lower_c_asm.zig", .import = "ast_bridge.zig", .why = "inline-asm operands are still AST-shaped" },
-    .{ .file = "lower_c_atomic.zig", .import = "ast_bridge.zig", .why = "atomic payload type still AST-shaped" },
     .{ .file = "lower_c_collect.zig", .import = "ast_bridge.zig", .why = "declaration collection walks AST decls" },
     .{ .file = "lower_c_collect.zig", .import = "type_bridge.zig", .why = "declaration collection classifies type syntax" },
     .{ .file = "lower_c_const.zig", .import = "ast_bridge.zig", .why = "constant emission still reads literal syntax" },

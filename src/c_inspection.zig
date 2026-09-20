@@ -32,10 +32,35 @@ const genericChildType = lower_c_shape.genericChildType;
 const globalInfoFromType = lower_c_shape.globalInfoFromType;
 const isOverflowOp = lower_c_op.isOverflowOp;
 const mmioFieldFromType = lower_c_shape.mmioFieldFromType;
-const orderingArg = lower_c_atomic.orderingArg;
 const widthBits = lower_c_op.widthBits;
-const asmHasMemoryClobber = lower_c_atomic.asmHasMemoryClobber;
 const atomicOrderCConstant = lower_c_atomic.atomicOrderCConstant;
+
+/// Reading an atomic ordering, or an asm clobber list, out of call syntax is
+/// an inspection concern: executable MIR carries the ordering on the operation
+/// by the time anything is lowered. These live here rather than in
+/// `lower_c_atomic.zig` so the C backend names no syntax type.
+fn orderingArg(args: []const ast.Expr) []const u8 {
+    for (args) |arg| {
+        if (arg.kind == .enum_literal) return arg.kind.enum_literal.text;
+    }
+    return "none";
+}
+
+fn atomicOrderingArg(args: []const ast.Expr, index: usize) []const u8 {
+    if (index >= args.len) return "none";
+    return switch (args[index].kind) {
+        .enum_literal => |literal| literal.text,
+        else => "none",
+    };
+}
+
+fn asmHasMemoryClobber(asm_stmt: ast.AsmStmt) bool {
+    if (asm_stmt.clobbers.len == 0) return true;
+    for (asm_stmt.clobbers) |clobber| {
+        if (std.mem.indexOf(u8, clobber, "memory") != null) return true;
+    }
+    return false;
+}
 const atomicOrderSynchronizes = lower_c_atomic.atomicOrderSynchronizes;
 const calleeIdentName = expr_syntax.calleeIdentName;
 const contractMatchesCallee = builtin_syntax.contractMatchesCallee;
@@ -713,18 +738,18 @@ fn atomicAccess(callee: anytype, args: anytype, ctx: anytype) ?lower_c_model.Ato
     const object = calleeIdentName(member.base.*) orelse return null;
     const payload = ctx.local_atomic_payloads.get(object) orelse return null;
     if (std.mem.eql(u8, member.name.text, "load")) {
-        const ordering = lower_c_atomic.atomicOrderingArg(args, 0);
+        const ordering = atomicOrderingArg(args, 0);
         if (!lower_c_atomic.isAtomicLoadOrdering(ordering)) return null;
         return .{ .op = "load", .object = object, .payload_type = payload, .ordering = ordering };
     }
     if (std.mem.eql(u8, member.name.text, "store")) {
-        const ordering = lower_c_atomic.atomicOrderingArg(args, 1);
+        const ordering = atomicOrderingArg(args, 1);
         if (!lower_c_atomic.isAtomicStoreOrdering(ordering)) return null;
         return .{ .op = "store", .object = object, .payload_type = payload, .ordering = ordering };
     }
     if (std.mem.eql(u8, member.name.text, "fetch_add") or std.mem.eql(u8, member.name.text, "fetch_sub")) {
         if (!lower_c_atomic.isAtomicIntegerPayload(payload)) return null;
-        const ordering = lower_c_atomic.atomicOrderingArg(args, 1);
+        const ordering = atomicOrderingArg(args, 1);
         if (atomicOrderCConstant(ordering) == null) return null;
         return .{ .op = member.name.text, .object = object, .payload_type = payload, .ordering = ordering };
     }
