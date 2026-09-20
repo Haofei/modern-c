@@ -1,0 +1,9 @@
+# MIR pointer provenance facts fail closed on reassignment dynamic writes calls and address escape
+mode: raw
+
++ "mir pointer_provenance_fact fn=invalidations subject=p element=none provenance=unknown storage=none"
++ "invalidation_reason=call"
++ "invalidation_reason=address_escape"
++ "invalidation_reason=dynamic_index_write"
++ "subject=holder element=0 provenance=unknown storage=none pointer_kind=single mutability=mut child=u32 field=ptrs invalidation_reason=dynamic_index_write"
++ "subject=holder element=none provenance=unknown storage=none pointer_kind=single mutability=mut child=u32 field=ptr invalidation_reason=call"

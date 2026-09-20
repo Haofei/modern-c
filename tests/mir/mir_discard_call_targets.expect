@@ -1,0 +1,6 @@
+# MIR owns discard call identities and argument types
+mode: raw
+
++ "mir ownership_event fn=discard_values kind=explicit_drop"
++ "root_type_symbol="
++ "mir ownership_event fn=discard_values kind=forget"

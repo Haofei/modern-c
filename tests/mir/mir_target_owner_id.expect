@@ -1,0 +1,5 @@
+# MIR target-type owner identities mirror direct calls
+mode: raw
+
++ "mir target_owner_identity fn=caller id=0 spelling=callee"
++ "mir target_type_fact fn=caller kind=direct_call_result target_type_id="

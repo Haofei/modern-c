@@ -1,0 +1,5 @@
+# MIR owns const_get base result and index facts
+mode: raw
+
++ "kind=index detail=const_get type=u32 const_index=2"
++ "mir const_get_fact fn=get_word index=2 typed_span_id="

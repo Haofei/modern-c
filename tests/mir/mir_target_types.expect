@@ -1,0 +1,9 @@
+# MIR owns target types for contextual constructors and literals
+mode: raw
+
++ "fn=make_slot kind=struct_literal target_type_id="
++ "fn=make_flags kind=struct_literal target_type_id="
++ "fn=make_c_word kind=struct_literal target_type_id="
++ "aggregate_construction=declared_struct"
++ "aggregate_construction=packed_bits"
++ "aggregate_construction=c_union"

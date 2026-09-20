@@ -2716,12 +2716,6 @@ test "MIR owns member, assignment, and return operand identities" {
     try std.testing.expect(saw_assignment_edges);
     try std.testing.expect(saw_return_edge);
 
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
-    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, dump.items, "mir place_identity fn=update"));
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, dump.items, "mir statement_operand_identity fn=update"));
-
     const mutable_function = functionByNameMut(&module_mir, "update").?;
     var corrupted = false;
     for (mutable_function.blocks[0].instructions) |*instruction| {
@@ -2939,8 +2933,6 @@ test "MIR target-type owner identities mirror direct calls" {
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
     try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir target_owner_identity fn=caller id=0 spelling=callee") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir target_type_fact fn=caller kind=direct_call_result target_type_id=") != null);
     const expected_call_identity = try std.fmt.allocPrint(std.testing.allocator, "mir call_identity fn=caller block=0 kind=call detail=callee callee_span_id={}", .{result_span.id.index()});
     defer std.testing.allocator.free(expected_call_identity);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, expected_call_identity) != null);
@@ -3787,31 +3779,6 @@ test "MIR target-type admission rejects unknown target-type result identity drif
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateLoweringAdmission(module_mir));
 }
 
-test "MIR dump exposes bounded FFI parameter contracts" {
-    const source =
-        \\extern "C" fn dma_submit(cpu: [*]mut u8, dma: DmaAddr, len: usize) -> i32;
-        \\extern fn inspect(bytes: []const u8, optional: ?*const u8) -> void;
-    ;
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_ffi_contracts.mc", source);
-    defer reporter.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
-
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir function name=dma_submit symbol_id=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "return=i32 no_lang_trap=false irq_context=false extern=true c_abi=true params=3") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "fn=dma_submit index=0 name=cpu kind=raw_many_pointer nonnull=true access=read_write extent=extern_contract alignment=type provenance=extern_unknown stable_until=call_return") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "fn=dma_submit index=1 name=dma kind=address address_class=dma conversion=explicit") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "fn=inspect index=0 name=bytes kind=slice nonnull=when_nonempty access=read extent=slice_length") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "fn=inspect index=1 name=optional kind=pointer nonnull=false access=read") != null);
-}
-
 fn functionHasInstruction(function: mir.Function, kind: mir.Instruction.Kind, detail: []const u8) bool {
     for (function.blocks) |block| {
         for (block.instructions) |instruction| {
@@ -4423,15 +4390,6 @@ test "MIR owns target types for contextual constructors and literals" {
     try std.testing.expectEqual(mir.AggregateConstructionKind.declared_struct, slot_fact.aggregate_construction.?);
     const c_word_fact = functionByName(typed_mir, "make_c_word").?.target_type_facts[0];
     try std.testing.expectEqual(mir.AggregateConstructionKind.c_union, c_word_fact.aggregate_construction.?);
-    var construction_dump: std.ArrayList(u8) = .empty;
-    defer construction_dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &construction_dump);
-    try std.testing.expect(std.mem.indexOf(u8, construction_dump.items, "fn=make_slot kind=struct_literal target_type_id=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, construction_dump.items, "fn=make_flags kind=struct_literal target_type_id=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, construction_dump.items, "fn=make_c_word kind=struct_literal target_type_id=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, construction_dump.items, "aggregate_construction=declared_struct") != null);
-    try std.testing.expect(std.mem.indexOf(u8, construction_dump.items, "aggregate_construction=packed_bits") != null);
-    try std.testing.expect(std.mem.indexOf(u8, construction_dump.items, "aggregate_construction=c_union") != null);
     try std.testing.expectEqual(@as(usize, 1), functionByName(typed_mir, "default_float").?.float_facts.len);
     try std.testing.expectEqual(mir.TargetTypeKind.char_literal, functionByName(typed_mir, "default_char").?.target_type_facts[0].kind);
     try std.testing.expectEqual(@as(usize, 1), functionByName(typed_mir, "make_float").?.float_facts.len);
@@ -6447,12 +6405,6 @@ test "executable MIR owns typed indirect calls and canonical callee roots" {
     }
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromMir(std.testing.allocator, typed_mir, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir indirect_callee_place fn=apply block=0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir indirect_callee_place fn=global_box_call block=0") != null);
-
     const apply_mut = functionByNameMut(&typed_mir, "apply").?;
     for (apply_mut.target_type_facts) |*fact| {
         if (fact.kind != .indirect_call_argument or fact.target_index != 0) continue;
@@ -6543,11 +6495,6 @@ test "executable MIR owns logical evaluation mode" {
         },
         else => {},
     } else return error.TestUnexpectedResult;
-
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromMir(std.testing.allocator, typed_mir, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir operand_identity fn=nested_bool") != null);
 
     for (mutable_bool_and.blocks[0].instructions) |*instruction| {
         if (instruction.kind != .binary or !std.mem.eql(u8, instruction.detail, "logical_and")) continue;
@@ -7119,12 +7066,6 @@ test "MIR owns const_get base result and index facts" {
     try mir.validateConstGetFactsForLowering(typed_mir);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
-
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=index detail=const_get type=u32 const_index=2") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir const_get_fact fn=get_word index=2 typed_span_id=") != null);
 }
 
 test "MIR rejects const_get with both index instruction and fact removed" {
@@ -8054,13 +7995,6 @@ test "MIR owns discard call identities and argument types" {
     }
     try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(plain_function, .discard_argument));
     try mir.validateLoweringAdmission(typed_mir);
-
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromMir(std.testing.allocator, typed_mir, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=discard_values kind=explicit_drop") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "root_type_symbol=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=discard_values kind=forget") != null);
 }
 
 test "MIR ownership event admission rejects explicit drop without glue identity" {
@@ -8207,14 +8141,6 @@ test "MIR records drop glue facts for auto-drop resources" {
     try std.testing.expectEqualStrings("Wrapper", module_mir.symbol_identities[module_mir.drop_glue_facts[1].typed_resource_symbol_id.index()].spelling);
     try std.testing.expect(module_mir.drop_glue_facts[1].typed_release_symbol_id.isValid());
     try std.testing.expectEqualStrings("close_wrapper", module_mir.symbol_identities[module_mir.drop_glue_facts[1].typed_release_symbol_id.index()].spelling);
-
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir drop_glue_fact resource_type=Ticket resource_symbol=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "release_fn=close_ticket release_symbol=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir drop_glue_fact resource_type=Wrapper resource_symbol=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "release_fn=close_wrapper release_symbol=") != null);
 }
 
 test "MIR records canonical type ownership facts" {
@@ -8260,17 +8186,6 @@ test "MIR records canonical type ownership facts" {
     try std.testing.expectEqual(mir.TypeOwnershipKind.affine, worker.kind);
     try std.testing.expect(worker.thread_move);
     try mir.validateLoweringAdmission(module_mir);
-
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir type_ownership type=Ticket symbol=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=affine") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir type_ownership type=Wrapper symbol=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir type_ownership type=Token symbol=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=linear") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir type_ownership type=WorkerTicket symbol=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "thread_move=true") != null);
 }
 
 test "MIR type ownership fact admission rejects symbol and duplicate drift" {
@@ -8466,6 +8381,8 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
 
     try mir.validateLoweringAdmission(module_mir);
 
+    // Not a fixture: the dump is asserted over an event installed by hand
+    // above, which no MC source produces.
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
     try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
@@ -8603,13 +8520,6 @@ test "MIR records local reinit ownership events" {
     try std.testing.expectEqual(mir.OwnershipEventKind.reinit, function.ownership_events[2].kind);
     try std.testing.expect(function.ownership_events[2].place.root_value_id.eql(value_identity.id));
     try mir.validateLoweringAdmission(module_mir);
-
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=reassign_local kind=storage_live") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=reassign_local kind=init") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=reassign_local kind=reinit") != null);
 }
 
 test "MIR ownership event admission accepts sibling copy locals with reused names" {
@@ -8959,11 +8869,6 @@ test "MIR records simple move-out ownership events" {
     try std.testing.expect(cancellation_plan.items[0].place.root_value_id.eql(g_identity.id));
     try std.testing.expect(cancellation_plan.items[0].drop_glue_symbol_id.isValid());
     try mir.validateLoweringAdmission(module_mir);
-
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=return_guard kind=move_out") != null);
 }
 
 test "MIR ownership authority skips cleanup registration for move-out" {
@@ -10790,59 +10695,6 @@ test "MIR elided bounds admission rejects invalid and duplicate SpanIds" {
     try std.testing.expectError(error.InvalidMirElidedBounds, mir.validateLoweringAdmission(duplicate));
 }
 
-test "MIR dump emits non-elided bounds facts" {
-    const source =
-        \\fn read_at(values: [2]u32, index: usize) -> u32 {
-        \\    return values[index];
-        \\}
-    ;
-
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_bounds_dump.mc", source);
-    defer reporter.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "bounds_facts=1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir bounds_fact fn=read_at kind=index recorded=true") != null);
-}
-
-test "MIR dump emits target-typed integer literal facts" {
-    const source =
-        \\extern fn takes_u8(value: u8) -> void;
-        \\fn integer_literals() -> u8 {
-        \\    let a: u8 = 255;
-        \\    takes_u8(0xff);
-        \\    return 7;
-        \\}
-    ;
-
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_integer_literal_facts.mc", source);
-    defer reporter.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "integer_facts=3") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=255 target_type=u8 target_type_id=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=0xff target_type=u8 target_type_id=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=7 target_type=u8 target_type_id=") != null);
-}
-
 test "MIR dump exposes representation value identities" {
     const source =
         \\fn return_ptr_param(p: *mut u8) -> *mut u8 {
@@ -10917,21 +10769,6 @@ test "MIR dump exposes representation value identities" {
     defer dump.deinit(std.testing.allocator);
     try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
 
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir instr fn=return_ptr_param") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir type_identity fn=return_ptr_param id=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir value_identity fn=return_ptr_param id=0 spelling=p") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "representation_facts=2") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=typed_load detail=p type=*mut value_id=p") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=representation_check detail=nonnull_pointer type=*mut value_id=p") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir instr fn=read_ptr_param") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir type_identity fn=read_ptr_param id=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir span_identity fn=read_ptr_param id=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "spelling=*mut") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir value_identity fn=read_ptr_param id=0 spelling=p") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=representation_use detail=deref_base type=*mut value_id=p") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=return_ptr_param kind=typed_load detail=p type=*mut value_id=p recorded=true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=return_ptr_param kind=representation_check detail=nonnull_pointer type=*mut value_id=p recorded=true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=read_ptr_param kind=representation_use detail=deref_base type=*mut value_id=p recorded=true") != null);
     const expected_repr_result = try std.fmt.allocPrint(std.testing.allocator, "typed_result_ty_id={}", .{read_fn.representation_facts[0].typed_result_ty.index()});
     defer std.testing.allocator.free(expected_repr_result);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, expected_repr_result) != null);
@@ -11162,38 +10999,6 @@ test "MIR records typed pointer provenance facts for direct globals and pointer 
     try std.testing.expect(hasPointerProvenanceFieldFact(function, "copied_outer", "inner.ptrs", 0, .global_storage, .none, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFieldFact(function, "assigned_outer", "inner.ptr", null, .global_storage, .reassignment, "shared_counter"));
     try std.testing.expect(hasPointerProvenanceFieldFact(function, "assigned_outer", "inner.ptrs", 0, .global_storage, .reassignment, "shared_counter"));
-
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir function name=direct_pointer_and_array symbol_id=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "return=void no_lang_trap=false irq_context=false") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "pointer_provenance_facts=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=p element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=noalias_global element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=noalias_assigned element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=ptrs element=0 provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_global_element element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=assigned_from_global_element element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_global_field element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_global_field_element element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_literal_field_element element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_copied_field element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_copied_field_element element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_assigned_copy_field element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_assigned_copy_field_element element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_nested_field element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_nested_field_element element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_copied_nested_field element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_copied_nested_field_element element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_assigned_nested_field element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=from_assigned_nested_field_element element=none provenance=global_storage storage=shared_counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=outer element=none provenance=global_storage storage=shared_counter pointer_kind=single mutability=mut child=u32 field=inner.ptr") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=outer element=0 provenance=global_storage storage=shared_counter pointer_kind=single mutability=mut child=u32 field=inner.ptrs") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=copied_outer element=none provenance=global_storage storage=shared_counter pointer_kind=single mutability=mut child=u32 field=inner.ptr") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=copied_outer element=0 provenance=global_storage storage=shared_counter pointer_kind=single mutability=mut child=u32 field=inner.ptrs") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=assigned_outer element=none provenance=global_storage storage=shared_counter pointer_kind=single mutability=mut child=u32 field=inner.ptr") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=assigned_outer element=0 provenance=global_storage storage=shared_counter pointer_kind=single mutability=mut child=u32 field=inner.ptrs") != null);
 }
 
 test "MIR records direct aggregate-return pointer facts and excludes legacy shapes" {
@@ -11829,18 +11634,6 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "nested_pointer_array_holder"));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "nested_pointer_array_holder", "ptrs[0][0]", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "nested_pointer_array_holder", "ptrs[1][1]", .global_storage));
-
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_summary_fact callee=direct_holder recorded=true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=direct_holder field=ptr provenance=global_storage pointer_kind=single") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=pointer_array_holder field=ptrs[0] provenance=global_storage pointer_kind=single") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=nested_holder field=inner.ptrs[0] provenance=global_storage pointer_kind=single") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=trailing_deep_nested_field_updated_holder field=middle.leaf.ptr provenance=global_storage pointer_kind=single") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=nested_array_holder field=cells[0].ptr provenance=global_storage pointer_kind=single") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=cell_matrix_holder field=groups[0][0].ptr provenance=global_storage pointer_kind=single") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=nested_pointer_array_holder field=ptrs[0][0] provenance=global_storage pointer_kind=single") != null);
 }
 
 test "MIR records direct internal global pointer return provenance in callers" {
@@ -12118,16 +11911,6 @@ test "MIR pointer provenance facts fail closed on reassignment dynamic writes ca
 
     const absent_fn = functionByName(typed_mir, "absent_computed_pointer").?;
     try std.testing.expectEqual(@as(usize, 0), countPointerProvenanceFacts(absent_fn, "p", .global_storage));
-
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=invalidations subject=p element=none provenance=unknown storage=none") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "invalidation_reason=call") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "invalidation_reason=address_escape") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "invalidation_reason=dynamic_index_write") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "subject=holder element=0 provenance=unknown storage=none pointer_kind=single mutability=mut child=u32 field=ptrs invalidation_reason=dynamic_index_write") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "subject=holder element=none provenance=unknown storage=none pointer_kind=single mutability=mut child=u32 field=ptr invalidation_reason=call") != null);
 }
 
 test "MIR records direct pointer-local copy provenance facts" {
@@ -12186,13 +11969,6 @@ test "MIR records direct pointer-local copy provenance facts" {
     try std.testing.expectEqual(@as(usize, 0), countPointerProvenanceFacts(fail_closed_fn, "self_invalidated_copy", .global_storage));
     try std.testing.expect(hasPointerProvenanceFact(fail_closed_fn, "gp", null, .unknown, .call, null));
     try std.testing.expectEqual(@as(usize, 0), countPointerProvenanceFacts(fail_closed_fn, "call_invalidated_copy", .global_storage));
-
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=pointer_local_copy_fact subject=q element=none provenance=global_storage storage=shared_counter pointer_kind=single") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=pointer_local_copy_fact subject=noalias_q element=none provenance=global_storage storage=shared_counter pointer_kind=single") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=pointer_local_copy_fact subject=r element=none provenance=global_storage storage=shared_counter pointer_kind=single") != null);
 }
 
 test "MIR records fixed pointer-array assignment from pointer-local copy facts" {
@@ -12817,15 +12593,6 @@ test "MIR records narrow raw-many zero offset pointer provenance facts" {
     try std.testing.expect(hasPointerProvenanceFact(fail_closed_fn, "q", null, .local_storage, .reassignment, "local"));
     try std.testing.expectEqual(@as(usize, 1), countPointerProvenanceFacts(fail_closed_fn, "q", .global_storage));
     try std.testing.expectEqual(@as(usize, 5), countPointerProvenanceFacts(fail_closed_fn, "q", .unknown));
-
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_fact subject=q element=none provenance=global_storage storage=shared_counter pointer_kind=raw_many") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_fact subject=t element=none provenance=global_storage storage=shared_counter pointer_kind=raw_many") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_assignment_fact subject=q element=none provenance=global_storage storage=shared_counter pointer_kind=raw_many") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_fail_closed subject=q element=none provenance=local_storage storage=local pointer_kind=raw_many") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_fail_closed subject=q element=none provenance=unknown storage=none pointer_kind=raw_many") != null);
 }
 
 test "MIR records every no_overflow operation and rejects unknown operations" {
@@ -14043,16 +13810,6 @@ test "MIR target representation checks see through casts" {
 
     var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
-
-    var dump: std.ArrayList(u8) = .empty;
-    defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=cast_pointer_return kind=representation_check detail=nonnull_pointer type=*mut value_id=cast recorded=true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=cast_pointer_local kind=representation_use detail=initializer type=*mut value_id=cast recorded=true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=cast_pointer_assignment kind=representation_use detail=assignment type=*mut value_id=cast recorded=true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=cast_pointer_call_arg kind=representation_use detail=call_arg type=*mut value_id=cast recorded=true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=cast_pointer_aggregate_field kind=representation_use detail=aggregate_field type=*mut value_id=cast recorded=true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=cast_pointer_aggregate_element kind=representation_use detail=aggregate_element type=*mut value_id=cast recorded=true") != null);
 
     try mir.verifyBuiltMir(typed_mir, &reporter);
     try std.testing.expect(!reporter.has_errors);

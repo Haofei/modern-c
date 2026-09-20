@@ -1,0 +1,5 @@
+# MIR dump emits non-elided bounds facts
+mode: raw
+
++ "bounds_facts=1"
++ "mir bounds_fact fn=read_at kind=index recorded=true"

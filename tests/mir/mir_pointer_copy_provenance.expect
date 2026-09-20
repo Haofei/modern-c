@@ -1,0 +1,6 @@
+# MIR records direct pointer-local copy provenance facts
+mode: raw
+
++ "mir pointer_provenance_fact fn=pointer_local_copy_fact subject=q element=none provenance=global_storage storage=shared_counter pointer_kind=single"
++ "mir pointer_provenance_fact fn=pointer_local_copy_fact subject=noalias_q element=none provenance=global_storage storage=shared_counter pointer_kind=single"
++ "mir pointer_provenance_fact fn=pointer_local_copy_fact subject=r element=none provenance=global_storage storage=shared_counter pointer_kind=single"

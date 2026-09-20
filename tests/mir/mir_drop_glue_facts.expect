@@ -1,0 +1,7 @@
+# MIR records drop glue facts for auto-drop resources
+mode: raw
+
++ "mir drop_glue_fact resource_type=Ticket resource_symbol="
++ "release_fn=close_ticket release_symbol="
++ "mir drop_glue_fact resource_type=Wrapper resource_symbol="
++ "release_fn=close_wrapper release_symbol="

@@ -1,0 +1,7 @@
+# MIR dump emits target-typed integer literal facts
+mode: raw
+
++ "integer_facts=3"
++ "mir integer_fact fn=integer_literals literal=255 target_type=u8 target_type_id="
++ "mir integer_fact fn=integer_literals literal=0xff target_type=u8 target_type_id="
++ "mir integer_fact fn=integer_literals literal=7 target_type=u8 target_type_id="

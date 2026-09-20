@@ -1,0 +1,9 @@
+# MIR dump exposes bounded FFI parameter contracts
+mode: raw
+
++ "mir function name=dma_submit symbol_id="
++ "return=i32 no_lang_trap=false irq_context=false extern=true c_abi=true params=3"
++ "fn=dma_submit index=0 name=cpu kind=raw_many_pointer nonnull=true access=read_write extent=extern_contract alignment=type provenance=extern_unknown stable_until=call_return"
++ "fn=dma_submit index=1 name=dma kind=address address_class=dma conversion=explicit"
++ "fn=inspect index=0 name=bytes kind=slice nonnull=when_nonempty access=read extent=slice_length"
++ "fn=inspect index=1 name=optional kind=pointer nonnull=false access=read"

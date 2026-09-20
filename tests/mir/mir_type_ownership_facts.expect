@@ -1,0 +1,10 @@
+# MIR records canonical type ownership facts
+mode: resolved
+
++ "mir type_ownership type=Ticket symbol="
++ "kind=affine"
++ "mir type_ownership type=Wrapper symbol="
++ "mir type_ownership type=Token symbol="
++ "kind=linear"
++ "mir type_ownership type=WorkerTicket symbol="
++ "thread_move=true"

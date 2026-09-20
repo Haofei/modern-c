@@ -11004,27 +11004,6 @@ fn expectCanonicalConditional(body: []const u8) !void {
     try expectContains(body, "goto mc_bb_");
 }
 
-fn commentSourceText(output: []const u8, comment_prefix: []const u8) ![]const u8 {
-    const comment_start = std.mem.indexOf(u8, output, comment_prefix) orelse return error.TestExpectedEqual;
-    const source_start = std.mem.indexOfPos(u8, output, comment_start, "source=") orelse return error.TestExpectedEqual;
-    const line_start = source_start + "source=".len;
-    const source_end = std.mem.indexOfPos(u8, output, line_start, " ") orelse return error.TestExpectedEqual;
-    return output[line_start..source_end];
-}
-
-fn expectCCommentSourceMatchesMirFact(c_output: []const u8, mir_dump: []const u8, comment_prefix: []const u8, mir_prefix: []const u8) !void {
-    const source = try commentSourceText(c_output, comment_prefix);
-    const colon = std.mem.indexOf(u8, source, ":") orelse return error.TestExpectedEqual;
-    const line = try std.fmt.parseUnsigned(usize, source[0..colon], 10);
-    const column = try std.fmt.parseUnsigned(usize, source[colon + 1 ..], 10);
-    const mir_start = std.mem.indexOf(u8, mir_dump, mir_prefix) orelse return error.TestExpectedEqual;
-    const mir_end = std.mem.indexOfPos(u8, mir_dump, mir_start, "\n") orelse mir_dump.len;
-    const mir_row = mir_dump[mir_start..mir_end];
-    const expected_source = try std.fmt.allocPrint(std.testing.allocator, "line={d} column={d}", .{ line, column });
-    defer std.testing.allocator.free(expected_source);
-    try expectContains(mir_row, expected_source);
-}
-
 fn cFunctionBody(output: []const u8, signature_prefix: []const u8) ![]const u8 {
     var search_from: usize = 0;
     const start = while (std.mem.indexOfPos(u8, output, search_from, signature_prefix)) |candidate| {

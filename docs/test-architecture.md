@@ -87,6 +87,11 @@ Beyond the outcome, a fixture (or its manifest row) carries the axes a gate must
   mcc_flags · description`). New host-driver tests are rows here, run by `host-harness.sh`.
 - The `// SPEC:` headers across `tests/spec/*.mc` — the conformance manifest, read by
   `src/spec_tests.zig`.
+- `tests/mir/<name>.mc` plus `tests/mir/<name>.expect` — the MIR dump corpus, walked by the
+  one table-driven test in `src/mir_fixture_tests.zig`. An `.expect` line is `+ "needle"`
+  (must appear), `- "needle"` (must not), or `= <n> "needle"` (must appear exactly n times);
+  `mode: raw|resolved|checked` names how far the front end runs before the dump is taken.
+  A new MIR dump expectation is two files here, not another golden string in the unit suite.
 - Backend parity is encoded by the `llvm-*` twin gates (a C gate and its LLVM counterpart):
   parity means **same fixture, both backends, behavior agrees**, validated behaviorally by
   `diff-backend` and the differential fuzzers — not an artifact diff of emitted C vs IR.
@@ -102,6 +107,9 @@ Beyond the outcome, a fixture (or its manifest row) carries the axes a gate must
 3. **A runtime/driver behavior** → a row in `tools/lib/host-tests.tsv` (host) and/or a QEMU gate.
 4. **A regression found by fuzzing** → distill it to a minimal fixture in the matching corpus,
    so it is locked in deterministically.
+5. **A MIR dump expectation** → a `tests/mir/` fixture pair. Keep an in-Zig dump assertion only
+   when the dump is taken over a module the test built or mutated by hand, which no MC source
+   produces.
 
 Whatever the layer: declare the contract (arch/profile/outcome) in the fixture, and the gate
 will honor it.

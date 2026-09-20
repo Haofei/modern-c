@@ -1,0 +1,4 @@
+# executable MIR owns logical evaluation mode
+mode: raw
+
++ "mir operand_identity fn=nested_bool"

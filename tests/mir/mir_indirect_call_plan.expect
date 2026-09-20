@@ -1,0 +1,5 @@
+# executable MIR owns typed indirect calls and canonical callee roots
+mode: checked
+
++ "mir indirect_callee_place fn=apply block=0"
++ "mir indirect_callee_place fn=global_box_call block=0"

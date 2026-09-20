@@ -1,0 +1,11 @@
+# MIR records direct aggregate-return pointer facts and excludes legacy shapes
+mode: raw
+
++ "mir aggregate_return_summary_fact callee=direct_holder recorded=true"
++ "mir aggregate_return_pointer_fact callee=direct_holder field=ptr provenance=global_storage pointer_kind=single"
++ "mir aggregate_return_pointer_fact callee=pointer_array_holder field=ptrs[0] provenance=global_storage pointer_kind=single"
++ "mir aggregate_return_pointer_fact callee=nested_holder field=inner.ptrs[0] provenance=global_storage pointer_kind=single"
++ "mir aggregate_return_pointer_fact callee=trailing_deep_nested_field_updated_holder field=middle.leaf.ptr provenance=global_storage pointer_kind=single"
++ "mir aggregate_return_pointer_fact callee=nested_array_holder field=cells[0].ptr provenance=global_storage pointer_kind=single"
++ "mir aggregate_return_pointer_fact callee=cell_matrix_holder field=groups[0][0].ptr provenance=global_storage pointer_kind=single"
++ "mir aggregate_return_pointer_fact callee=nested_pointer_array_holder field=ptrs[0][0] provenance=global_storage pointer_kind=single"

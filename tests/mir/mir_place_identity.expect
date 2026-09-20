@@ -1,0 +1,5 @@
+# MIR owns member, assignment, and return operand identities
+mode: raw
+
+= 4 "mir place_identity fn=update"
+= 2 "mir statement_operand_identity fn=update"

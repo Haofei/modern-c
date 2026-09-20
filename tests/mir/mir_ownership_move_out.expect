@@ -1,0 +1,4 @@
+# MIR records simple move-out ownership events
+mode: resolved
+
++ "mir ownership_event fn=return_guard kind=move_out"

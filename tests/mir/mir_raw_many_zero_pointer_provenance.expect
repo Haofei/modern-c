@@ -1,0 +1,8 @@
+# MIR records narrow raw-many zero offset pointer provenance facts
+mode: raw
+
++ "mir pointer_provenance_fact fn=raw_many_zero_fact subject=q element=none provenance=global_storage storage=shared_counter pointer_kind=raw_many"
++ "mir pointer_provenance_fact fn=raw_many_zero_fact subject=t element=none provenance=global_storage storage=shared_counter pointer_kind=raw_many"
++ "mir pointer_provenance_fact fn=raw_many_zero_assignment_fact subject=q element=none provenance=global_storage storage=shared_counter pointer_kind=raw_many"
++ "mir pointer_provenance_fact fn=raw_many_zero_fail_closed subject=q element=none provenance=local_storage storage=local pointer_kind=raw_many"
++ "mir pointer_provenance_fact fn=raw_many_zero_fail_closed subject=q element=none provenance=unknown storage=none pointer_kind=raw_many"

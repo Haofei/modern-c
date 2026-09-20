@@ -1,0 +1,6 @@
+# MIR records local reinit ownership events
+mode: resolved
+
++ "mir ownership_event fn=reassign_local kind=storage_live"
++ "mir ownership_event fn=reassign_local kind=init"
++ "mir ownership_event fn=reassign_local kind=reinit"
