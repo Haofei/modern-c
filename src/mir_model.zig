@@ -3001,6 +3001,55 @@ pub fn executableGuardedLocalScalarDerefPlace(
         std.mem.eql(u8, pointer.child, place.ty.name());
 }
 
+/// Is `local` initialized exactly once from a pointer this body already
+/// representation-checked, and never written through afterwards?
+///
+/// A deref through such a local needs no guard of its own: the check at the
+/// initializer is the same check, on the same pointer, and it already owns
+/// its trap edge. Without this, `call(...).*` -- whose call result is bound to
+/// a local so the place has storage to root at -- would want a second guard
+/// for a pointer the body checked one statement earlier.
+pub fn executableLocalInitializedByCheckedPointer(body: *const ExecutableBody, local: LocalId) bool {
+    if (!local.isValid()) return false;
+    // Only a slot the builder created to hold a value binds a pointer whose
+    // check is provably the same check. A source local is a name the program
+    // can reassign or alias, and proving it would change the guard on places
+    // that have always carried one.
+    var synthetic = false;
+    for (body.locals) |identity| {
+        if (identity.id.eql(local)) synthetic = identity.kind == .synthetic;
+    }
+    if (!synthetic) return false;
+    var initializations: usize = 0;
+    for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |init| {
+            if (!init.local.eql(local)) continue;
+            initializations += 1;
+            const value_id = init.value orelse return false;
+            var checked = false;
+            for (body.expressions) |expression| {
+                if (!expression.id.eql(value_id)) continue;
+                checked = switch (expression.operation) {
+                    .representation_check => |check| check.kind == .nonnull_pointer,
+                    else => false,
+                };
+                break;
+            }
+            if (!checked) return false;
+        },
+        // Any store whose place is the whole local replaces the checked
+        // pointer with one nothing has proven.
+        .store => |store| {
+            for (body.places) |place| {
+                if (!place.id.eql(store.place)) continue;
+                if (place.projection_count == 0 and place.root == .local and place.root.local.eql(local)) return false;
+            }
+        },
+        else => {},
+    };
+    return initializations == 1;
+}
+
 /// Whether an aggregate can be lowered as a deterministic sequence of
 /// race-unordered scalar leaf accesses. C unions intentionally fail closed:
 /// their active storage member is not represented by ordinary field recursion.

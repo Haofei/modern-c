@@ -2488,7 +2488,8 @@ fn verifyMemoryAccess(
 fn verifyCompletePlace(body: *const mir.ExecutableBody, target: mir.ExecutablePlace) !void {
     if (target.root_nonnull_proven) {
         if (target.root != .local or target.projection_count == 0 or target.projections[0] != .deref or
-            !mir.executableLocalInitializedByOptionalPresentPayload(body, target.root.local))
+            !(mir.executableLocalInitializedByOptionalPresentPayload(body, target.root.local) or
+                mir.executableLocalInitializedByCheckedPointer(body, target.root.local)))
             return error.InvalidPlaceType;
         switch (target.root_ty) {
             .pointer => |shape| if (shape.kind != .single) return error.InvalidPlaceType,

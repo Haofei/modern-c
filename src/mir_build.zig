@@ -7876,6 +7876,8 @@ pub const FunctionBuilder = struct {
             "__mc_for_iterable"
         else if (std.mem.eql(u8, prefix, "for_index"))
             "__mc_for_index"
+        else if (std.mem.eql(u8, prefix, "deref_pointer"))
+            "__mc_deref_pointer"
         else
             return error.InvalidSyntheticLocal;
         try self.executable_locals.append(self.allocator, .{ .id = id, .spelling = spelling, .kind = .synthetic });
@@ -10868,7 +10870,14 @@ pub const FunctionBuilder = struct {
             const local_id = place.root.local;
             if (local_id.isValid() and local_id.index() < self.executable_locals.items.len) {
                 const spelling = self.executable_locals.items[local_id.index()].spelling;
-                place.root_nonnull_proven = self.proven_nonnull_bindings.contains(spelling);
+                const transient_body: mir_model.ExecutableBody = .{
+                    .locals = self.executable_locals.items,
+                    .expressions = self.executable_expressions.items,
+                    .places = self.executable_places.items,
+                    .statements = self.executable_statements.items,
+                };
+                place.root_nonnull_proven = self.proven_nonnull_bindings.contains(spelling) or
+                    mir_model.executableLocalInitializedByCheckedPointer(&transient_body, local_id);
                 if (self.livePointerProvenanceForDirectLocal(spelling)) |live| {
                     place.pointer_provenance = live.provenance;
                 }
@@ -11163,7 +11172,17 @@ pub const FunctionBuilder = struct {
                 break :projection true;
             },
             .deref => |inner| projection: {
-                if (!try self.fillExecutablePlace(place, inner.*) or place.projection_count >= mir_model.max_executable_projections) break :projection false;
+                // A dereferenced call result has no named storage to root at.
+                // Rooting the place at the call *value* would be wrong: a
+                // guarded deref spells its place more than once, so the call
+                // would run more than once. Bind it first instead.
+                if (executablePlaceCallOperand(inner.*)) |operand| {
+                    const bound = try self.materializeExecutableDerefPointer(operand) orelse break :projection false;
+                    place.root = .{ .local = bound.local };
+                    place.root_ty = bound.ty;
+                    place.root_type_id = bound.type_id;
+                } else if (!try self.fillExecutablePlace(place, inner.*)) break :projection false;
+                if (place.projection_count >= mir_model.max_executable_projections) break :projection false;
                 place.projections[place.projection_count] = .deref;
                 place.projection_count += 1;
                 break :projection true;
@@ -11191,6 +11210,49 @@ pub const FunctionBuilder = struct {
         const callee = directCalleeName(call.callee.*) orelse return false;
         const summary = self.summaries.get(callee) orelse return false;
         return summary.return_ty == .never;
+    }
+
+    /// The call expression under a dereference, when the dereferenced value
+    /// is a call result rather than named storage.
+    fn executablePlaceCallOperand(input: ast.Expr) ?ast.Expr {
+        var expr = input;
+        while (expr.kind == .grouped or expr.kind == .move_expr) expr = switch (expr.kind) {
+            .grouped => |inner| inner.*,
+            .move_expr => |inner| inner.*,
+            else => unreachable,
+        };
+        return switch (expr.kind) {
+            .call => expr,
+            else => null,
+        };
+    }
+
+    /// Bind a call's pointer result to a synthetic local, so a place has
+    /// storage to root at and the call is evaluated exactly once.
+    fn materializeExecutableDerefPointer(
+        self: *FunctionBuilder,
+        operand: ast.Expr,
+    ) !?struct { local: LocalId, ty: ValueType, type_id: TypeId } {
+        var operand_ty = self.exprType(operand);
+        if (operand_ty == .unknown or operand_ty == .value) if (self.typeExprForExpr(operand)) |resolved| {
+            operand_ty = self.executableValueType(resolved);
+        };
+        switch (operand_ty) {
+            .pointer => |shape| if (shape.kind != .single) return null,
+            else => return null,
+        }
+        const type_id = try self.internTypeId(operand_ty);
+        const value = try self.ensureExecutableExprAs(operand, operand_ty);
+        if (!value.isValid() or value.index() >= self.executable_expressions.items.len) return null;
+        const local = try self.appendSyntheticExecutableLocal("deref_pointer");
+        try self.appendExecutableStatement(self.sourcePoint(operand.span), .{ .local_init = .{
+            .local = local,
+            .ty = operand_ty,
+            .type_id = type_id,
+            .value = value,
+            .mutable = false,
+        } });
+        return .{ .local = local, .ty = operand_ty, .type_id = type_id };
     }
 
     fn collectAddressTakenBlock(self: *FunctionBuilder, block: ast.Block) anyerror!void {

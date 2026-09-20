@@ -117,31 +117,31 @@ kinds. `ExecutableStatement.id` keeps its meaning as an array index -- it is
 what `owner_statement` points at -- so the two were not renumbered from one
 sequence. See [`typed-semantic-facts.md`](typed-semantic-facts.md#the-join-between-the-two-bodies).
 
-### Note: what deref-of-a-call-result needs
+### Note: how deref-of-a-call-result was closed
 
-`call(...).*` is the largest remaining `E_BACKEND_UNSUPPORTED` family in
-`backend-expected-failures.json` (`address_classes.mc`,
-`kernel_region_tokens.mc`, `lock_guards_data.mc`, and part of
-`data_race_semantics.mc`). Measured, not guessed:
+`call(...).*` was the largest `E_BACKEND_UNSUPPORTED` family in
+`backend-expected-failures.json`. Recorded because the shape that works is not
+the obvious one:
 
-- Rooting the place at the call *value*, the way the index path does, is the
-  wrong shape. A guarded deref spells its place more than once, so the call
-  would be evaluated more than once. The place must be rooted at storage.
-- Binding the call result to a synthetic local first is the right shape: the
-  deref then has the ordinary `executableGuardedLocalScalarDerefPlace` form,
-  which already carries its representation check, its trap edge and its
-  renderer in both backends. That much works -- with it, the place stops being
-  `<unsupported-place>`.
-- What is left is the representation check. A single-pointer call result
-  already gets a `representation_check` *expression* wrapping the call, and
-  the deref's place then wants a second guard for the same pointer, while the
-  legacy stream emits only one `representation_check` instruction to own the
-  trap edge. The right answer is that the bound local is proven non-null by
-  the check at the call, so the place needs no guard of its own -- which means
-  teaching `root_nonnull_proven` a second way to be established.
-  `mir_executable_body.verifyCompletePlace` currently admits it only via
-  `executableLocalInitializedByOptionalPresentPayload`, so this is a new model
-  predicate plus its verifier rule, not a widening of an existing one.
+- Rooting the place at the call *value*, the way the index path does, is
+  wrong. A guarded deref spells its place more than once, so the call would be
+  evaluated more than once.
+- Binding the call result to a synthetic local first gives the deref the
+  ordinary `executableGuardedLocalScalarDerefPlace` form, which already has
+  its representation check, its trap edge and its renderer in both backends.
+- The remaining piece was the guard. The call result is already wrapped in a
+  `representation_check` expression, so a second guard on the place would
+  check the same pointer twice against one legacy `representation_check`
+  instruction. `executableLocalInitializedByCheckedPointer` is the proof that
+  it does not need one, and it is deliberately narrow: only a *synthetic*
+  local, initialized exactly once from a `nonnull_pointer` check and never
+  stored through. Widening it to source locals changes the guard on places
+  that have always carried one -- `let q = p; q.* = v;` regressed the moment
+  the predicate accepted a named local.
+
+`data_race_semantics.mc` is still listed: its deref cause is fixed, and what
+remains there is `index` / `range_slice` over slices whose elements are
+pointers.
 
 Not on the list: removing traits, closures, generics, or the advanced ownership
 forms. All were measured and none is a bounded cut. They stay frozen.
