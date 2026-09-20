@@ -64,11 +64,72 @@ Not yet typed — the honest list:
   `typed_inst_id` -- but they are still side tables the verifier joins, not
   data hanging off `ExecutableBody`. Resolved accesses also key on an
   `AccessId`; pointer provenance keys on the place it describes.
-- **There is no join from a legacy instruction to the typed body.**
-  `Instruction.typed_inst_id` and `ExecutableStatement.id` are both `InstId`
-  but come from two independent counters, and `ExecutableExpression` has no
-  `InstId` at all. The remaining `Instruction.detail` readers are listed in
-  [`todo.md`](todo.md); the ones that are still blocked are blocked on this.
+- **The legacy instruction stream and the typed body are joined, but the
+  stream is still there.** See [the join](#the-join-between-the-two-bodies)
+  below. The remaining `Instruction.detail` readers are listed in
+  [`todo.md`](todo.md).
+
+## The join between the two bodies
+
+MIR carries two bodies for the same function, so anything that holds a legacy
+`Instruction` and needs the typed answer -- or holds a typed node and needs to
+know what it replaced -- needs a way to cross between them. That way is an
+identity, not a span and not a string:
+
+```text
+Instruction.typed_inst_id  ──┐
+                             ├──►  the one node that realizes it
+ExecutableStatement.inst_id ─┘     (ExecutableStatement or ExecutableExpression)
+ExecutableExpression.inst_id
+```
+
+`ExecutableStatement.id` is that statement's index in
+`ExecutableBody.statements` -- it is what `ExecutableExpression.owner_statement`
+points at -- and `ExprId` is an index into `ExecutableBody.expressions`. Neither
+is an instruction identity, and numbering them from the instruction counter
+would break every use of them as an array position. So the join is a separate
+field on the typed node, `inst_id`, holding the `InstId` of the instruction
+that node replaces.
+
+The builder records it where it emits both forms of the same source statement.
+The direction that matters is *instruction to node*: the instruction is the
+thing being replaced, and the question a consumer asks is "what realizes this
+instruction?". `mir_model.executableNodeForInstruction` (and its statement- and
+expression-typed variants) is that lookup.
+
+`mir_verify.validateExecutableBodyJoinForLowering` makes it an identity rather
+than a hint. It proves three things before any backend may consume a module:
+
+1. a recorded `inst_id` names an instruction that exists in that function, so
+   following the join cannot land on nothing;
+2. no two typed nodes name the same instruction, so "the node that realizes
+   this instruction" is single-valued;
+3. in a complete body, every instruction that `instructionJoinsExecutableBody`
+   declares joinable is named by exactly one node -- the join is total on its
+   declared domain.
+
+That domain is the statement-shaped instruction kinds: `local`, `assign`,
+`assert_condition`, `defer_cleanup`, `control_transfer`, `return_value`,
+`asm_effect`. It is a predicate over instruction *kind* alone, because a
+predicate that read `Instruction.detail` would be the string classification the
+typed body exists to replace. Expression-shaped kinds are outside it: one
+source expression becomes a run of instructions (a load, a representation
+check, the value itself) against a tree of typed expressions, so "exactly one"
+is the wrong shape for them -- they may still carry `inst_id`, and (1) and (2)
+still hold for them, they are just not required to be present. `binary` is the
+one statement-shaped kind left out: it heads `if let`, `switch`, `while` and
+`for`, and the first three are realized by a `guard` statement and are joined,
+but a `for` loop is realized by a `for_each` *terminator*, which is not a
+statement and so has no node to name.
+
+Two function shapes are exempt from (3): an `extern` declaration, which has no
+body, and a global initializer's pseudo-callable, which is an expression
+compiled with a function body's checks rather than a statement sequence.
+`CheckedProgram` is where that distinction is recorded, so the verifier reads
+it from `CheckedCallableFact.kind` rather than guessing from the body's shape.
+
+The nine instruction-scoped fact families are unchanged by this: they continue
+to join on `typed_inst_id` with their own exactly-one invariants.
 
 ## The sema-to-MIR handoff
 

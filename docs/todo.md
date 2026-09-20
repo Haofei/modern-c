@@ -106,12 +106,13 @@ specific rather than on effort:
   inside `test {}` blocks, where they hand-build an `Instruction`. Nothing to
   move: they are test-only consumers.
 
-The missing piece for `lower_c_map.zig` is a join from a legacy instruction to
-the `ExecutableBody` node that realizes it. `Instruction.typed_inst_id` and
-`ExecutableStatement.id` are both `InstId` but come from two independent
-counters in `FunctionBuilder`, and expressions carry no `InstId` at all, so
-today no such join exists. Either number the two from one sequence or give
-`ExecutableExpression` the id of the instruction it replaces.
+The join `lower_c_map.zig` was waiting on now exists: `ExecutableStatement` and
+`ExecutableExpression` carry `inst_id`, the identity of the instruction the
+node replaces, and `mir_verify.validateExecutableBodyJoinForLowering` proves it
+resolves, is single-valued, and is total on the statement-shaped instruction
+kinds. `ExecutableStatement.id` keeps its meaning as an array index -- it is
+what `owner_statement` points at -- so the two were not renumbered from one
+sequence. See [`typed-semantic-facts.md`](typed-semantic-facts.md#the-join-between-the-two-bodies).
 
 Not on the list: removing traits, closures, generics, or the advanced ownership
 forms. All were measured and none is a bounded cut. They stay frozen.

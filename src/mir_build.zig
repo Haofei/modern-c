@@ -10538,6 +10538,34 @@ pub const FunctionBuilder = struct {
         });
     }
 
+    /// Name the instruction that the statement at `statement_id` realizes.
+    ///
+    /// The builder emits both forms of a source statement in the same place:
+    /// the typed `ExecutableStatement` and the legacy `Instruction` that the
+    /// stream still carries. This records that they are the same statement,
+    /// so a consumer can cross from one to the other by identity instead of
+    /// re-deriving the answer from `Instruction.detail`.
+    ///
+    /// The link is recorded once per node: a statement already joined keeps
+    /// its first instruction, which is what makes the join single-valued.
+    fn linkExecutableStatement(self: *FunctionBuilder, statement_id: InstId, inst_id: InstId) void {
+        if (!statement_id.isValid() or statement_id.index() >= self.executable_statements.items.len) return;
+        if (!inst_id.isValid()) return;
+        const statement = &self.executable_statements.items[statement_id.index()];
+        if (statement.inst_id.isValid()) return;
+        statement.inst_id = inst_id;
+    }
+
+    /// Link the statement appended most recently to the instruction emitted
+    /// most recently. Both are the current source statement.
+    fn linkLastExecutableStatementToLastInstruction(self: *FunctionBuilder) void {
+        if (self.executable_statements.items.len == 0) return;
+        self.linkExecutableStatement(
+            InstId.fromIndex(self.executable_statements.items.len - 1),
+            self.last_inst_id,
+        );
+    }
+
     fn ownExecutableCleanupIds(self: *FunctionBuilder, ids: []const CleanupActionId) ![]const CleanupActionId {
         if (ids.len == 0) return &.{};
         const owned = try self.allocator.dupe(CleanupActionId, ids);
@@ -11356,6 +11384,7 @@ pub const FunctionBuilder = struct {
                         .mutable = mutable,
                     } });
                     try self.addInstrWithValue(.local, name.text, ty, stmt.span, name.text);
+                    self.linkLastExecutableStatementToLastInstruction();
                     if (local.init) |initializer| {
                         self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1].typed_value_operand_span_id =
                             try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(initializer).span));
@@ -11466,6 +11495,7 @@ pub const FunctionBuilder = struct {
                     } });
                 }
                 try self.addInstr(.assign, exprText(node.target), assignment_target_ty, stmt.span);
+                self.linkLastExecutableStatementToLastInstruction();
                 const assignment_instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
                 assignment_instruction.typed_target_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.target).span));
                 assignment_instruction.typed_value_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.value).span));
@@ -11558,6 +11588,7 @@ pub const FunctionBuilder = struct {
                 const statement_id = InstId.fromIndex(self.executable_statements.items.len);
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .guard = .{ .kind = .assert_, .condition = condition } });
                 try self.addInstr(.assert_condition, "condition", .bool, stmt.span);
+                self.linkExecutableStatement(statement_id, self.last_inst_id);
                 try self.appendTargetTypeFact(.assert_condition, ast_query.simpleNameType("bool", expr.span), .bool, expr.span);
                 try self.addConversionCheck(.bool, expr, .condition, expr.span);
                 try self.buildExpr(expr);
@@ -11578,6 +11609,7 @@ pub const FunctionBuilder = struct {
                 else
                     null else null;
                 if (executable_return) |value| try self.contextualizeExecutableLiteral(value, self.return_ty);
+                const return_statement_id = InstId.fromIndex(self.executable_statements.items.len);
                 if (terminal_trap == null) {
                     try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .return_ = executable_return });
                     try self.setExecutableTerminatorCleanup(0);
@@ -11607,6 +11639,7 @@ pub const FunctionBuilder = struct {
                     return true;
                 }
                 try self.addInstrWithValue(.return_value, if (maybe) |_| "value" else "void", self.return_ty, stmt.span, if (maybe) |expr| exprText(expr) else null);
+                self.linkExecutableStatement(return_statement_id, self.last_inst_id);
                 if (maybe) |expr| {
                     self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1].typed_value_operand_span_id =
                         try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(expr).span));
@@ -11617,6 +11650,7 @@ pub const FunctionBuilder = struct {
             .@"break" => |label| {
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .control_transfer = .break_ });
                 try self.addInstr(.control_transfer, "break", .void, stmt.span);
+                self.linkLastExecutableStatementToLastInstruction();
                 if (self.executableLoopTarget(label)) |target| {
                     try self.setExecutableTerminatorCleanup(target.cleanup_depth);
                     try self.addSuccessor(self.current, target.break_block);
@@ -11630,6 +11664,7 @@ pub const FunctionBuilder = struct {
             .@"continue" => |label| {
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .control_transfer = .continue_ });
                 try self.addInstr(.control_transfer, "continue", .void, stmt.span);
+                self.linkLastExecutableStatementToLastInstruction();
                 if (self.executableLoopTarget(label)) |target| {
                     try self.setExecutableTerminatorCleanup(target.cleanup_depth);
                     try self.addSuccessor(self.current, target.continue_block);
@@ -11652,6 +11687,7 @@ pub const FunctionBuilder = struct {
                 }
                 if (!self.active_unsafe) try self.addInstr(.unsafe_check, "asm.opaque", .unknown, stmt.span);
                 try self.addInstr(.asm_effect, "opaque", .value, stmt.span);
+                self.linkLastExecutableStatementToLastInstruction();
                 if (self.naked) {
                     self.setTerminator(.unreachable_);
                     return true;
@@ -11663,6 +11699,7 @@ pub const FunctionBuilder = struct {
                 try self.appendExecutableStatement(self.sourcePoint(stmt.span), .{ .defer_register = action });
                 try self.active_executable_cleanups.append(self.allocator, action);
                 try self.addInstr(.defer_cleanup, "cleanup", .void, stmt.span);
+                self.linkLastExecutableStatementToLastInstruction();
                 try self.addResultDeferCheck(expr);
                 try self.buildExpr(expr);
                 return false;
@@ -11719,6 +11756,7 @@ pub const FunctionBuilder = struct {
         self.local_aggregate_pointer_aliases.clearRetainingCapacity();
         self.local_pointer_array_aliases.clearRetainingCapacity();
         try self.addInstr(.binary, patternText(node.pattern), .branch, span);
+        const if_let_inst_id = self.last_inst_id;
         // Verification also walks ill-typed programs to report their source
         // diagnostics. Only valid `if let` subjects have an owned type fact;
         // leave the invalid form factless instead of aborting MIR construction.
@@ -11755,7 +11793,9 @@ pub const FunctionBuilder = struct {
             self.executable_supported = false;
             condition = try self.ensureExecutableExpr(node.value);
         }
+        const if_guard_id = InstId.fromIndex(self.executable_statements.items.len);
         try self.appendExecutableStatement(self.sourcePoint(span), .{ .guard = .{ .kind = .if_, .condition = condition } });
+        self.linkExecutableStatement(if_guard_id, if_let_inst_id);
         try self.buildExpr(node.value);
         try self.addIfLetPatternCheck(node);
 
@@ -12071,6 +12111,7 @@ pub const FunctionBuilder = struct {
         self.local_aggregate_pointer_aliases.clearRetainingCapacity();
         self.local_pointer_array_aliases.clearRetainingCapacity();
         try self.addInstr(.binary, "switch_subject", .branch, span);
+        const switch_subject_inst_id = self.last_inst_id;
         const subject_type_expr = self.switchSubjectTypeExpr(node.subject) orelse booleanSwitchSubjectType(node);
         if (subject_type_expr) |ty| {
             try self.appendTargetTypeFact(.switch_subject, ty, self.executableValueType(ty), node.subject.span);
@@ -12118,7 +12159,9 @@ pub const FunctionBuilder = struct {
                 );
             }
         }
+        const switch_guard_id = InstId.fromIndex(self.executable_statements.items.len);
         try self.appendExecutableStatement(self.sourcePoint(span), .{ .guard = .{ .kind = .switch_, .condition = executable_subject } });
+        self.linkExecutableStatement(switch_guard_id, switch_subject_inst_id);
         try self.buildExpr(node.subject);
         try self.addRepresentationUseForExpr("switch_subject", node.subject);
         try self.addSwitchPatternChecks(node);
@@ -12875,6 +12918,7 @@ pub const FunctionBuilder = struct {
             header_id = id;
         }
         try self.addInstr(.binary, @tagName(node.kind), .branch, span);
+        const loop_inst_id = self.last_inst_id;
         var for_binding_ty_expr: ?ast.TypeExpr = null;
         var for_iterable_local: ?LocalId = null;
         var for_iterable_ty: ValueType = .unknown;
@@ -12886,7 +12930,14 @@ pub const FunctionBuilder = struct {
         var for_kind: mir_model.ExecutableIndexKind = .fixed_array;
         var for_bound: ?usize = null;
         if (node.iterable) |iterable| {
-            if (node.kind == .@"while") try self.appendExecutableStatement(self.sourcePoint(span), .{ .guard = .{ .kind = .while_, .condition = try self.ensureExecutableExpr(iterable) } });
+            if (node.kind == .@"while") {
+                const condition = try self.ensureExecutableExpr(iterable);
+                // Building the condition may append prerequisite statements,
+                // so the guard's identity is the post-evaluation length.
+                const while_guard_id = InstId.fromIndex(self.executable_statements.items.len);
+                try self.appendExecutableStatement(self.sourcePoint(span), .{ .guard = .{ .kind = .while_, .condition = condition } });
+                self.linkExecutableStatement(while_guard_id, loop_inst_id);
+            }
             if (node.kind == .@"while") {
                 try self.appendTargetTypeFact(.loop_condition, ast_query.simpleNameType("bool", iterable.span), .bool, iterable.span);
                 try self.addConversionCheck(.bool, iterable, .condition, iterable.span);

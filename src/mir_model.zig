@@ -1256,6 +1256,16 @@ pub const ExecutableExpression = struct {
     /// Statement whose evaluation owns this operation. ExprIds are dense and
     /// operands must precede their consumer within this statement.
     owner_statement: InstId,
+    /// The legacy `Instruction` this node realizes, by instruction identity
+    /// (`Instruction.typed_inst_id`), or `.invalid` when this node has no
+    /// counterpart in the instruction stream.
+    ///
+    /// `ExprId` and `ExecutableStatement.id` are positions in their own
+    /// arrays, so neither can name an instruction; this is the join and it is
+    /// the only one. `instructionJoinsExecutableBody` names the instruction
+    /// kinds a complete body must realize, and `mir_verify` proves the join
+    /// is a total, single-valued function on exactly those.
+    inst_id: InstId = .invalid,
     span_id: SpanId = .invalid,
     result_ty: ValueType,
     type_id: TypeId = .invalid,
@@ -1774,9 +1784,15 @@ pub const ExecutableCleanupAction = struct {
 };
 
 pub const ExecutableStatement = struct {
+    /// This statement's position in `ExecutableBody.statements`. It is an
+    /// array index, not an instruction identity; see `inst_id`.
     id: InstId,
     block_id: BlockId,
     span_id: SpanId = .invalid,
+    /// The legacy `Instruction` this statement realizes, by instruction
+    /// identity (`Instruction.typed_inst_id`), or `.invalid` when the
+    /// statement is synthesized with no counterpart in the stream.
+    inst_id: InstId = .invalid,
     operation: Operation,
 
     pub const Operation = union(enum) {
@@ -2321,6 +2337,82 @@ pub const ExecutableIncompleteReason = enum {
         };
     }
 };
+
+/// One node of `ExecutableBody`, named from the legacy instruction stream.
+///
+/// The join direction that matters is instruction -> typed node: an
+/// `Instruction` is the thing being replaced, and the question a consumer
+/// asks is "what realizes this instruction?".
+pub const ExecutableNode = union(enum) {
+    expression: ExprId,
+    statement: InstId,
+};
+
+/// Does a complete `ExecutableBody` have to realize this instruction?
+///
+/// This is the definition of "has a typed counterpart". It is deliberately a
+/// predicate over instruction *kind* alone: a predicate that read
+/// `Instruction.detail` would be the string classification the typed body
+/// exists to replace.
+///
+/// The set is the statement-shaped instruction kinds -- the ones the builder
+/// emits once per source statement, beside the `ExecutableStatement` that
+/// carries the same statement's semantics. Expression-shaped kinds are not in
+/// it: one source expression becomes a run of instructions (a load, a
+/// representation check, the value itself) against a tree of typed
+/// expressions, so "exactly one" is the wrong shape for them. They may still
+/// carry `inst_id`, and the join is still proved single-valued for them; they
+/// are just not required to be present.
+///
+/// `.binary` is the one statement-shaped kind deliberately left out. It marks
+/// the head of `if let`, `switch`, `while` and `for`; the first three are
+/// realized by a `guard` statement and are joined, but a `for` loop is
+/// realized by a `for_each` terminator, which is not a statement and so has
+/// no node to name. Requiring `.binary` would make the invariant false for
+/// every `for` loop rather than describe the body.
+pub fn instructionJoinsExecutableBody(instruction: Instruction) bool {
+    return switch (instruction.kind) {
+        .local,
+        .assign,
+        .assert_condition,
+        .defer_cleanup,
+        .control_transfer,
+        .return_value,
+        .asm_effect,
+        => true,
+        else => false,
+    };
+}
+
+/// The typed node that realizes `inst_id`, or `null` when there is none.
+pub fn executableNodeForInstruction(body: *const ExecutableBody, inst_id: InstId) ?ExecutableNode {
+    if (!inst_id.isValid()) return null;
+    for (body.statements) |statement| {
+        if (statement.inst_id.eql(inst_id)) return .{ .statement = statement.id };
+    }
+    for (body.expressions) |expression| {
+        if (expression.inst_id.eql(inst_id)) return .{ .expression = expression.id };
+    }
+    return null;
+}
+
+/// The `ExecutableStatement` that realizes `inst_id`, or `null`.
+pub fn executableStatementForInstruction(body: *const ExecutableBody, inst_id: InstId) ?ExecutableStatement {
+    if (!inst_id.isValid()) return null;
+    for (body.statements) |statement| {
+        if (statement.inst_id.eql(inst_id)) return statement;
+    }
+    return null;
+}
+
+/// The `ExecutableExpression` that realizes `inst_id`, or `null`.
+pub fn executableExpressionForInstruction(body: *const ExecutableBody, inst_id: InstId) ?ExecutableExpression {
+    if (!inst_id.isValid()) return null;
+    for (body.expressions) |expression| {
+        if (expression.inst_id.eql(inst_id)) return expression;
+    }
+    return null;
+}
 
 pub const ExecutableBody = struct {
     complete: bool = true,

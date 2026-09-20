@@ -1088,6 +1088,7 @@ pub const LoweringAdmissionError = error{
     InvalidMirElidedBounds,
     InvalidMirExecutableLocalFacts,
     InvalidMirExecutableTypeFacts,
+    InvalidMirExecutableBodyJoin,
     StaleMirTargetTypeFacts,
     UnknownMirLoweringType,
     InvalidMirExecutableBody,
@@ -1104,6 +1105,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateInstructionSpanIdentitiesForLowering(module);
     for (module.functions) |*function| mir_executable_body.verify(function) catch return error.InvalidMirExecutableBody;
     try validateExecutableRefusalsNamed(module);
+    try validateExecutableBodyJoinForLowering(module);
     try validateExecutableLocalFactsForLowering(module);
     try validateExecutableTypeFactsForLowering(module);
     try validateRepresentationFactsForLowering(module);
@@ -1140,6 +1142,85 @@ fn executableBodyIsEmpty(body: *const mir_model.ExecutableBody) bool {
         body.aggregate_types.len == 0 and body.enum_types.len == 0 and body.result_types.len == 0 and
         body.tagged_union_types.len == 0 and body.expressions.len == 0 and body.places.len == 0 and
         body.statements.len == 0 and body.terminators.len == 0;
+}
+
+/// The legacy instruction stream and `ExecutableBody` are one body.
+///
+/// `ExecutableStatement.id` and `ExprId` are array positions, so on their own
+/// they cannot say which instruction a typed node replaces. The join is
+/// `ExecutableStatement.inst_id` / `ExecutableExpression.inst_id`, and this is
+/// what makes it usable as an identity rather than a hint:
+///
+///   1. a recorded `inst_id` names an instruction that exists in this
+///      function, so a consumer that follows it cannot land on nothing;
+///   2. no two typed nodes name the same instruction, so
+///      "the node that realizes this instruction" is single-valued;
+///   3. in a complete body every instruction the model declares joinable
+///      (`instructionJoinsExecutableBody`) is named by exactly one node, so
+///      the function is total on the declared domain.
+///
+/// An incomplete body is exempt from (3) only: the builder stopped partway,
+/// so there is nothing to be total against. (1) and (2) still hold there.
+fn validateExecutableBodyJoinForLowering(module: Module) error{InvalidMirExecutableBodyJoin}!void {
+    for (module.functions) |function| {
+        const body = &function.executable_body;
+        for (body.statements) |statement| {
+            if (!statement.inst_id.isValid()) continue;
+            if (!functionHasInstructionId(function, statement.inst_id)) return error.InvalidMirExecutableBodyJoin;
+            if (countExecutableNodesForInstruction(body, statement.inst_id) != 1) return error.InvalidMirExecutableBodyJoin;
+        }
+        for (body.expressions) |expression| {
+            if (!expression.inst_id.isValid()) continue;
+            if (!functionHasInstructionId(function, expression.inst_id)) return error.InvalidMirExecutableBodyJoin;
+            if (countExecutableNodesForInstruction(body, expression.inst_id) != 1) return error.InvalidMirExecutableBodyJoin;
+        }
+        // A body that was never built as a statement sequence has no typed
+        // form to be total against: an extern declaration has no body at all,
+        // and a global initializer's pseudo-function carries only the
+        // instruction stream for its initializer expression.
+        if (!body.isComplete() or function.is_extern or executableBodyIsEmpty(body)) continue;
+        if (functionIsGlobalInitializer(module, function)) continue;
+        for (function.blocks) |block| {
+            for (block.instructions) |instruction| {
+                if (!mir_model.instructionJoinsExecutableBody(instruction)) continue;
+                if (countExecutableNodesForInstruction(body, instruction.typed_inst_id) != 1) return error.InvalidMirExecutableBodyJoin;
+            }
+        }
+    }
+}
+
+/// A global's initializer is compiled as a pseudo-callable so its expression
+/// gets the same checks a function body's does. It is not a statement
+/// sequence, and `CheckedProgram` is where that distinction is recorded.
+fn functionIsGlobalInitializer(module: Module, function: Function) bool {
+    if (!function.typed_symbol_id.isValid()) return false;
+    for (module.checked_callables) |checked| {
+        if (checked.kind != .global_initializer) continue;
+        if (checked.symbol_id.eql(function.typed_symbol_id)) return true;
+    }
+    return false;
+}
+
+fn functionHasInstructionId(function: Function, inst_id: mir_model.InstId) bool {
+    if (!inst_id.isValid()) return false;
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (instruction.typed_inst_id.eql(inst_id)) return true;
+        }
+    }
+    return false;
+}
+
+fn countExecutableNodesForInstruction(body: *const mir_model.ExecutableBody, inst_id: mir_model.InstId) usize {
+    if (!inst_id.isValid()) return 0;
+    var count: usize = 0;
+    for (body.statements) |statement| {
+        if (statement.inst_id.eql(inst_id)) count += 1;
+    }
+    for (body.expressions) |expression| {
+        if (expression.inst_id.eql(inst_id)) count += 1;
+    }
+    return count;
 }
 
 /// A refused executable body says why it was refused.
