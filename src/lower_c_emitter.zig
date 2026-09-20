@@ -631,13 +631,9 @@ pub const CEmitter = struct {
     fn emitMmioStructTypes(self: *CEmitter) !void {
         for (self.mir_module.structs) |fact| {
             if (!fact.is_mmio) continue;
-            const struct_decl = try signature_type_materializer.structDecl(
-                self.scratch.allocator(),
-                self.mir_module.signature_types,
-                self.mir_module.symbol_identities,
-                fact,
-            );
-            if (self.mmio_structs.contains(struct_decl.name.text)) try lower_c_mmio.emitStruct(self.mmioStructEmitContext(), struct_decl);
+            const name = self.symbolSpelling(fact.symbol_id) orelse return error.UnsupportedCEmission;
+            if (self.mmio_structs.contains(name))
+                try lower_c_mmio.emitStruct(self.mmioStructEmitContext(), name, fact.fields);
         }
         for (self.mir_module.checked_globals) |global| {
             if (self.mir_module.checkedGlobalInitializer(global) != null)
@@ -1991,7 +1987,15 @@ pub const CEmitter = struct {
             .context = self.mmioContext(),
             .emit_ctx = self,
             .c_ident = cIdentForMmio,
+            .signature_types = self.mir_module.signature_types,
         };
+    }
+
+    /// The declared spelling of a module symbol, checked against its own row.
+    fn symbolSpelling(self: *const CEmitter, id: mir.SymbolId) ?[]const u8 {
+        if (!id.isValid() or id.index() >= self.mir_module.symbol_identities.len) return null;
+        const identity = self.mir_module.symbol_identities[id.index()];
+        return if (identity.id.eql(id)) identity.spelling else null;
     }
 
     fn underlyingIntTypeNameForConvert(ctx: *anyopaque, ty: ast_bridge.TypeExpr) ?[]const u8 {

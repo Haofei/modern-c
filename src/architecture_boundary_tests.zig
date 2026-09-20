@@ -84,7 +84,6 @@ const exceptions = [_]Exception{
     .{ .file = "lower_c_defs.zig", .import = "ast_bridge.zig", .why = "type/global definition emission walks AST decls" },
     .{ .file = "lower_c_emitter.zig", .import = "ast_bridge.zig", .why = "emitter state still carries AST declaration payloads" },
     .{ .file = "lower_c_emitter.zig", .import = "type_bridge.zig", .why = "emitter still classifies type syntax" },
-    .{ .file = "lower_c_mmio_defs.zig", .import = "ast_bridge.zig", .why = "MMIO definition emission walks AST decls" },
     .{ .file = "lower_c_model.zig", .import = "ast_bridge.zig", .why = "C lowering model stores AST declaration payloads" },
     .{ .file = "lower_c_names.zig", .import = "ast_bridge.zig", .why = "C name mangling reads declaration syntax" },
     .{ .file = "lower_c_names.zig", .import = "type_bridge.zig", .why = "C name mangling reads type syntax" },
