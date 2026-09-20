@@ -7,14 +7,12 @@ const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const mir = @import("mir.zig");
 const signature_type_mechanics = @import("signature_type_mechanics.zig");
-const type_bridge = @import("type_bridge.zig");
 
 const MmioStruct = lower_c_model.MmioStruct;
 const PackedBitsField = lower_c_model.PackedBitsField;
 const PackedBitsInfo = lower_c_model.PackedBitsInfo;
 const SliceInfo = lower_c_model.SliceInfo;
 const mmioFieldFromType = lower_c_shape.mmioFieldFromType;
-const typeName = type_bridge.typeName;
 
 pub const SignatureSliceTypeNameFn = *const fn (ctx: *anyopaque, child: mir.SignatureTypeId, mutability: mir.TypeMutability) anyerror![]const u8;
 
@@ -34,6 +32,7 @@ pub fn collectPackedBits(
     allocator: std.mem.Allocator,
     packed_bits_map: *std.StringHashMap(PackedBitsInfo),
     packed_bits: ast_bridge.PackedBitsDecl,
+    repr_name: []const u8,
     repr_c_type: []const u8,
 ) !void {
     var fields = std.StringHashMap(PackedBitsField).init(allocator);
@@ -42,7 +41,7 @@ pub fn collectPackedBits(
         try fields.put(field.name.text, .{ .bit_index = bit_index });
     }
     try packed_bits_map.put(packed_bits.name.text, .{
-        .repr_name = typeName(packed_bits.repr) orelse "unknown",
+        .repr_name = repr_name,
         .repr_c_type = repr_c_type,
         .fields = fields,
     });
@@ -111,13 +110,4 @@ fn putSignatureSliceType(ctx: SignatureSliceArtifactContext, type_id: mir.Signat
             .mutability = mutability,
         });
     }
-}
-
-pub fn bindEnvIsPointerLike(type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), ty: ast_bridge.TypeExpr) bool {
-    return switch (type_bridge.resolveAliasType(type_aliases, ty).kind) {
-        .pointer, .raw_many_pointer, .fn_pointer, .slice => true,
-        .nullable => |child| bindEnvIsPointerLike(type_aliases, child.*),
-        .qualified => |node| bindEnvIsPointerLike(type_aliases, node.child.*),
-        else => false,
-    };
 }

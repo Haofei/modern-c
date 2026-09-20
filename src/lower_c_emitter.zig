@@ -2065,7 +2065,16 @@ pub const CEmitter = struct {
     }
 
     fn collectPackedBits(self: *CEmitter, packed_bits: ast_bridge.PackedBitsDecl) !void {
-        try lower_c_collect.collectPackedBits(self.allocator, &self.packed_bits, packed_bits, try self.cTypeFor(packed_bits.repr, .typedef_name));
+        // The repr's spelling is read here, where the declaration syntax
+        // already is, rather than inside the collector: that keeps
+        // lower_c_collect.zig off type syntax entirely.
+        try lower_c_collect.collectPackedBits(
+            self.allocator,
+            &self.packed_bits,
+            packed_bits,
+            type_bridge.typeName(packed_bits.repr) orelse "unknown",
+            try self.cTypeFor(packed_bits.repr, .typedef_name),
+        );
     }
 
     fn collectOverlayUnionFact(self: *CEmitter, overlay_union: ast_bridge.OverlayUnionDecl, fact: mir.OverlayUnionFact) !void {
