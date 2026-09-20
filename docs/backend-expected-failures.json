@@ -8,37 +8,37 @@
       "fixture": "address_classes.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_expression` in `accept_direct_call_virtual_pointer_deref` (declined by mir-build)."
     },
     {
       "fixture": "cast_class_strip.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_expression` in `accept_pointer_to_pointer` (declined by mir-build)."
     },
     {
       "fixture": "comptime_params.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `unsupported_call` in `block_len_size__4` (declined by mir-build)."
     },
     {
       "fixture": "data_race_semantics.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_expression` in `possibly_racing_direct_address_deref_load` (declined by mir-build)."
     },
     {
       "fixture": "defer_cleanup.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a call to `close_resource` in `accept_lexical_cleanup` (declined by call-shape)."
     },
     {
       "fixture": "enums.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a call to `takes_open_error` in `accept_enum_call_arg` (declined by call-shape)."
     },
     {
       "fixture": "generic_region_view_containers.mc",
@@ -50,31 +50,31 @@
       "fixture": "hosted_io.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `unsupported_try` in `copy_one` (declined by mir-build)."
     },
     {
       "fixture": "initialization.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_executable_shape` in `accept_defer_reads_var_assigned_after_defer` (declined by mir-build)."
     },
     {
       "fixture": "kernel_region_tokens.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_expression` in `accept_rcu_use_inside_region` (declined by mir-build)."
     },
     {
       "fixture": "local_address_escape.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_place` in `accept_pass_local_address_down` (declined by mir-build)."
     },
     {
       "fixture": "lock_guards_data.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_expression` in `accept_relock_after_release` (declined by mir-build)."
     },
     {
       "fixture": "move_borrow_escape.mc",
@@ -86,7 +86,7 @@
       "fixture": "move_cfg.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_executable_shape` in `accept_try_defer` (declined by mir-build)."
     },
     {
       "fixture": "move_diverge.mc",
@@ -110,13 +110,13 @@
       "fixture": "serial_counter_ops.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_expression` in `tick_elapsed` (declined by mir-build)."
     },
     {
       "fixture": "slice_ranges.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support expression `range_slice` in `accept_slice_range_from_struct_field` (declined by capability)."
     },
     {
       "fixture": "traits_dyn_accept.mc",
@@ -152,13 +152,13 @@
       "fixture": "try_propagation.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_cleanup_action` in `accept_result_pointer_try` (declined by mir-build)."
     },
     {
       "fixture": "type_arg_and_trivial_drop_reject.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk. emitVerifiedMirFunction returns false without an explicit unsupported marker, so the construct is not yet identified; this is a backend capability gap, not a verifier rejection."
+      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_executable_shape` in `type_id` (declined by mir-build)."
     }
   ]
 }

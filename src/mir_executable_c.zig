@@ -1411,96 +1411,138 @@ fn emitExpressionOperation(
 /// Backend capability admission layered on top of the producer's semantic
 /// completeness bit.  This is deliberately structural and typed: it never
 /// consults source text, spans, or declaration ASTs.
+/// Why this renderer declines a body, named at the granularity the fix needs:
+/// the kind of thing that was refused and the specific construct tag. The
+/// answer exists only on the refusal path, so an accepted body pays nothing
+/// for it, and `canEmitBody` is this same walk with the answer discarded --
+/// the two can never drift into disagreeing.
+pub const BodyDecline = struct {
+    category: []const u8,
+    construct: []const u8,
+
+    fn at(category: []const u8, construct: []const u8) BodyDecline {
+        return .{ .category = category, .construct = construct };
+    }
+};
+
 pub fn canEmitBody(body: *const mir.ExecutableBody) bool {
-    if (!body.isComplete() or body.terminators.len == 0) return false;
-    for (body.parameters) |parameter| if (!supportsParameter(body, parameter) or
-        localById(body, parameter.local) == null)
-        return false;
-    for (body.expressions) |expression| if (!supportsExpression(body, expression)) return false;
+    return bodyDecline(body) == null;
+}
+
+pub fn bodyDecline(body: *const mir.ExecutableBody) ?BodyDecline {
+    if (!body.isComplete()) return BodyDecline.at("a body left incomplete by", @tagName(body.incomplete_reason));
+    if (body.terminators.len == 0) return BodyDecline.at("a body", "with no terminator");
+    for (body.parameters) |parameter| {
+        if (localById(body, parameter.local) == null) return BodyDecline.at("parameter", "without a declared local");
+        if (!supportsParameter(body, parameter)) return BodyDecline.at("parameter type", @tagName(parameter.ty));
+    }
+    for (body.expressions) |expression| if (!supportsExpression(body, expression))
+        return BodyDecline.at("expression", @tagName(expression.operation));
     // Every exceptional edge must be owned by an operation whose complete
     // trap set this renderer understands. This prevents a newly added edge
     // kind from being silently ignored while still emitting ordinary C.
     for (body.trap_edges) |edge| {
         switch (edge.owner) {
             .expression => |owner_id| {
-                const owner = expressionById(body, owner_id) orelse return false;
-                if (!expressionHasExactTrapEdges(body, owner.*)) return false;
+                const owner = expressionById(body, owner_id) orelse
+                    return BodyDecline.at("trap edge", "owned by an unknown expression");
+                if (!expressionHasExactTrapEdges(body, owner.*))
+                    return BodyDecline.at("trap edge on expression", @tagName(owner.operation));
             },
             .statement => |owner_id| {
-                const owner = statementById(body, owner_id) orelse return false;
+                const owner = statementById(body, owner_id) orelse
+                    return BodyDecline.at("trap edge", "owned by an unknown statement");
                 switch (owner.operation) {
-                    .store => |store| if (!memoryStoreSupported(body, owner.*, store)) return false,
-                    .guard => |guard| if (!assertGuardHasExactTrapEdge(body, owner.*, guard)) return false,
-                    else => return false,
+                    .store => |store| if (!memoryStoreSupported(body, owner.*, store))
+                        return BodyDecline.at("trapping store of", @tagName(store.ty)),
+                    .guard => |guard| if (!assertGuardHasExactTrapEdge(body, owner.*, guard))
+                        return BodyDecline.at("trap edge on guard", @tagName(guard.kind)),
+                    else => return BodyDecline.at("trap edge on statement", @tagName(owner.operation)),
                 }
             },
         }
     }
     for (body.places) |place| {
         if (place.storage == .atomic) {
-            if (!atomicPlaceSupported(body, place)) return false;
+            if (!atomicPlaceSupported(body, place)) return BodyDecline.at("atomic place of type", @tagName(place.ty));
         } else if (place.projection_count != 0 and !scalarAccessPlaceSupported(body, place) and
             !mir.executableGuardedLocalAggregateDerefPlace(body, place, false) and
             !mir.executableParameterProjectedPlace(body, place, false) and
             mir.executableFixedArrayIndexPlace(body, place) == null and
             mir.executableSliceIndexPlace(body, place) == null)
-            return false;
+            return BodyDecline.at("projected place of type", @tagName(place.ty));
         switch (place.root) {
-            .local => |local| if (localById(body, local) == null) return false,
+            .local => |local| if (localById(body, local) == null)
+                return BodyDecline.at("place", "rooted at an unknown local"),
             .symbol => |symbol| {
-                const identity = symbolById(body, symbol) orelse return false;
-                if (identity.kind != .global) return false;
+                const identity = symbolById(body, symbol) orelse
+                    return BodyDecline.at("place", "rooted at an unknown symbol");
+                if (identity.kind != .global) return BodyDecline.at("place rooted at symbol kind", @tagName(identity.kind));
             },
-            .value => |value| if (expressionById(body, value) == null) return false,
+            .value => |value| if (expressionById(body, value) == null)
+                return BodyDecline.at("place", "rooted at an unknown value"),
         }
     }
     for (body.statements) |statement| {
-        if (!hasBlock(body, statement.block_id)) return false;
+        if (!hasBlock(body, statement.block_id)) return BodyDecline.at("statement", "outside any block");
         switch (statement.operation) {
             .local_init => |local| {
-                if (localById(body, local.local) == null) return false;
+                if (localById(body, local.local) == null) return BodyDecline.at("local_init", "of an undeclared local");
                 if (local.value) |value| {
-                    const expression = expressionById(body, value) orelse return false;
-                    if (!localInitializerTypeCompatible(local.ty, expression.result_ty)) return false;
+                    const expression = expressionById(body, value) orelse
+                        return BodyDecline.at("local_init", "from an unknown expression");
+                    if (!localInitializerTypeCompatible(local.ty, expression.result_ty))
+                        return BodyDecline.at("local_init of type", @tagName(local.ty));
                     if (!(supportsType(body, local.ty) or callableValueExpressionSupported(body, expression.*) or
                         dynBindSupported(body, expression.*) or opaqueValueExpressionSupported(body, expression.*) or
                         (mir.executableVaListLocal(body, local.local) and mir.executableVaStartLocal(body, value) != null) or
-                        (local.ty == .value and dynLocal(body, local.local)))) return false;
-                } else if (isSliceType(local.ty) or local.ty == .value) return false;
+                        (local.ty == .value and dynLocal(body, local.local))))
+                        return BodyDecline.at("local of type", @tagName(local.ty));
+                } else if (isSliceType(local.ty) or local.ty == .value)
+                    return BodyDecline.at("uninitialized local of type", @tagName(local.ty));
             },
-            .store => |store| if (!memoryStoreSupported(body, statement, store)) return false,
-            .packed_field_store => |store| if (!packedFieldStoreSupported(body, statement, store)) return false,
-            .eval => |value| if (expressionById(body, value) == null) return false,
+            .store => |store| if (!memoryStoreSupported(body, statement, store))
+                return BodyDecline.at("store of type", @tagName(store.ty)),
+            .packed_field_store => |store| if (!packedFieldStoreSupported(body, statement, store))
+                return BodyDecline.at("statement", "packed_field_store"),
+            .eval => |value| if (expressionById(body, value) == null)
+                return BodyDecline.at("eval of", "an unknown expression"),
             .guard => |guard| {
-                const condition = expressionById(body, guard.condition) orelse return false;
+                const condition = expressionById(body, guard.condition) orelse
+                    return BodyDecline.at("guard on", "an unknown expression");
                 if (guard.kind == .assert_) {
                     if (!sameValueType(condition.result_ty, .bool) or
                         !condition.owner_statement.eql(statement.id) or
                         !condition.block_id.eql(statement.block_id) or
-                        !assertGuardHasExactTrapEdge(body, statement, guard)) return false;
+                        !assertGuardHasExactTrapEdge(body, statement, guard))
+                        return BodyDecline.at("guard", @tagName(guard.kind));
                 }
             },
-            .return_ => |value| if (value) |expression| if (expressionById(body, expression) == null) return false,
+            .return_ => |value| if (value) |expression| if (expressionById(body, expression) == null)
+                return BodyDecline.at("return of", "an unknown expression"),
             .opaque_asm => |asm_value| if (asm_value.template_count > mir.max_executable_operands or
-                asm_value.clobber_count > mir.max_executable_operands) return false,
-            .precise_asm => |asm_value| if (!preciseAsmSupported(body, asm_value)) return false,
+                asm_value.clobber_count > mir.max_executable_operands)
+                return BodyDecline.at("statement", "opaque_asm"),
+            .precise_asm => |asm_value| if (!preciseAsmSupported(body, asm_value))
+                return BodyDecline.at("statement", "precise_asm"),
             .control_transfer => {},
             .defer_register, .cleanup_run => {},
-            .unsupported => return false,
+            .unsupported => return BodyDecline.at("statement", "unsupported"),
         }
     }
     for (body.terminators) |terminator| switch (terminator.operation) {
         // Block slice order is storage order, not a verified CFG edge.
-        .fallthrough => return false,
+        .fallthrough => return BodyDecline.at("terminator", "fallthrough"),
         .return_, .unreachable_ => {},
-        .trap_ => |kind| if (trapHelper(kind) == null) return false,
-        .jump => |target| if (!hasBlock(body, target)) return false,
-        .branch => |branch| if (expressionById(body, branch.condition) == null or !hasBlock(body, branch.true_block) or !hasBlock(body, branch.false_block)) return false,
-        .for_each => |loop| if (!forEachSupported(body, loop)) return false,
-        .for_step => |step| if (!forStepSupported(body, step)) return false,
-        .switch_ => |switch_| if (!switchTerminatorSupported(body, switch_)) return false,
+        .trap_ => |kind| if (trapHelper(kind) == null) return BodyDecline.at("trap terminator", @tagName(kind)),
+        .jump => |target| if (!hasBlock(body, target)) return BodyDecline.at("jump to", "an unknown block"),
+        .branch => |branch| if (expressionById(body, branch.condition) == null or !hasBlock(body, branch.true_block) or !hasBlock(body, branch.false_block))
+            return BodyDecline.at("terminator", "branch"),
+        .for_each => |loop| if (!forEachSupported(body, loop)) return BodyDecline.at("terminator", "for_each"),
+        .for_step => |step| if (!forStepSupported(body, step)) return BodyDecline.at("terminator", "for_step"),
+        .switch_ => |switch_| if (!switchTerminatorSupported(body, switch_)) return BodyDecline.at("terminator", "switch"),
     };
-    return true;
+    return null;
 }
 
 fn preciseAsmSupported(body: *const mir.ExecutableBody, asm_value: mir.ExecutablePreciseAsm) bool {

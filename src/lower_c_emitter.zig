@@ -821,14 +821,16 @@ pub const CEmitter = struct {
             const previous_source_path = self.source_path;
             self.source_path = self.sourcePathForSpan(spanFromMirSourcePoint(fact.declaration_source));
             defer self.source_path = previous_source_path;
-            if (try self.emitVerifiedMirFunction(fact, fn_mir, render_attrs)) {
-                continue;
-            } else if (mir_executable_body.explicitUnsupported(&fn_mir)) |unsupported| {
+            const decline = try self.emitVerifiedMirFunction(fact, fn_mir, render_attrs) orelse continue;
+            if (mir_executable_body.explicitUnsupported(&fn_mir)) |unsupported| {
                 self.reportUnsupported(spanFromMirSourcePoint(unsupported.source), unsupported.construct());
-                return error.UnsupportedCEmission;
             } else {
-                return error.UnsupportedCEmission;
+                // Name the refusal precisely enough to act on: whose body, which
+                // phase refused it, and what it refused.  A bare "does not yet
+                // support this construct" costs a bisect to turn into a fix.
+                self.reportFunctionDecline(spanFromMirSourcePoint(fact.declaration_source), fn_mir.name, decline);
             }
+            return error.UnsupportedCEmission;
         }
     }
 
@@ -1518,24 +1520,23 @@ pub const CEmitter = struct {
         try self.emitFunctionPrototype(fact);
     }
 
-    fn emitVerifiedMirFunction(self: *CEmitter, fact: mir.CallableEmissionFact, fn_mir: mir.Function, render_attrs: anytype) !bool {
+    /// Render a function's verified executable body, or report why not.
+    /// `null` means it was rendered.
+    fn emitVerifiedMirFunction(self: *CEmitter, fact: mir.CallableEmissionFact, fn_mir: mir.Function, render_attrs: anytype) !?FunctionDecline {
         // Emit only complete, verified executable MIR within this backend's
         // capability set.
-        const executable_body = if (self.mirExecutableBodySupported(&fn_mir)) body: {
-            mir_executable_body.verify(&fn_mir) catch break :body null;
-            break :body &fn_mir.executable_body;
-        } else null;
-        if (executable_body) |body| {
-            if (render_attrs.naked) {
-                if (!mir_executable_c.canEmitNakedBody(body)) return false;
-                try self.emitExecutableMirNakedFunction(fact, body, render_attrs);
-            } else {
-                try self.emitExecutableMirFunction(fact, &fn_mir, body, render_attrs);
-            }
-            return true;
+        if (self.mirExecutableBodyDecline(&fn_mir)) |decline| return decline;
+        mir_executable_body.verify(&fn_mir) catch |err|
+            return FunctionDecline.at("body-verification", "a body rejected as", @errorName(err));
+        const body = &fn_mir.executable_body;
+        if (render_attrs.naked) {
+            if (!mir_executable_c.canEmitNakedBody(body))
+                return FunctionDecline.at("capability", "a naked body", "this renderer cannot schedule");
+            try self.emitExecutableMirNakedFunction(fact, body, render_attrs);
+        } else {
+            try self.emitExecutableMirFunction(fact, &fn_mir, body, render_attrs);
         }
-
-        return false;
+        return null;
     }
 
     fn emitExecutableMirNakedFunction(self: *CEmitter, fact: mir.CallableEmissionFact, body: *const mir.ExecutableBody, render_attrs: codegen_attrs.FunctionRenderAttrs) !void {
@@ -1570,46 +1571,76 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
-    fn mirExecutableBodySupported(self: *CEmitter, function: *const mir.Function) bool {
+    /// Why a function's body is not rendered, at the granularity a fix needs:
+    /// which phase refused it and which construct it refused.  `null` means
+    /// the body is renderable.
+    const FunctionDecline = struct {
+        phase: []const u8,
+        category: []const u8,
+        construct: []const u8,
+
+        fn at(phase: []const u8, category: []const u8, construct: []const u8) FunctionDecline {
+            return .{ .phase = phase, .category = category, .construct = construct };
+        }
+    };
+
+    fn mirExecutableBodyDecline(self: *CEmitter, function: *const mir.Function) ?FunctionDecline {
         // The generic renderer does not schedule cleanup edges.  Admission is
         // fail-closed until ownership cleanup is itself represented by
         // executable-body statements/blocks.
-        if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return false;
+        if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0)
+            return FunctionDecline.at("ownership-cleanup", "an ownership cleanup plan with", "scheduled actions");
         if (function.executable_body.cleanup_actions.len == 0) {
-            for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return false;
+            for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0)
+                return FunctionDecline.at("ownership-cleanup", "a cleanup CFG edge carrying", "unrepresented actions");
         }
         const body = &function.executable_body;
-        if (!mir_executable_c.canEmitBody(body)) return false;
-        if (body.parameters.len != function.param_types.len or body.parameters.len != function.param_count) return false;
+        if (mir_executable_c.bodyDecline(body)) |decline| {
+            // An incomplete body was refused upstream, by the MIR builder; the
+            // renderer never got a say. Attributing that to this backend's
+            // capability set would send the fix to the wrong file.
+            const phase: []const u8 = if (body.isComplete()) "capability" else "mir-build";
+            return FunctionDecline.at(phase, decline.category, decline.construct);
+        }
+        if (body.parameters.len != function.param_types.len or body.parameters.len != function.param_count)
+            return FunctionDecline.at("signature", "a parameter list of", "mismatched arity");
         for (body.parameters, function.param_types) |parameter, parameter_ty| {
-            if (!mir.ValueType.eql(parameter.ty, parameter_ty)) return false;
+            if (!mir.ValueType.eql(parameter.ty, parameter_ty))
+                return FunctionDecline.at("signature", "a parameter of type", @tagName(parameter.ty));
         }
         for (body.expressions) |expression| switch (expression.operation) {
             .direct_call => |call| {
-                if (!call.callee.isValid() or call.callee.index() >= body.symbols.len) return false;
+                if (!call.callee.isValid() or call.callee.index() >= body.symbols.len)
+                    return FunctionDecline.at("call-shape", "a call to", "an unknown callee");
                 const symbol = body.symbols[call.callee.index()];
-                if (!symbol.id.eql(call.callee)) return false;
-                const signature = self.mirFunctionByName(symbol.spelling) orelse return false;
+                if (!symbol.id.eql(call.callee))
+                    return FunctionDecline.at("call-shape", "a call to", "a mismatched callee symbol");
+                const signature = self.mirFunctionByName(symbol.spelling) orelse
+                    return FunctionDecline.at("call-shape", "a call to", symbol.spelling);
                 if (signature.is_variadic or signature.param_types.len != call.argument_count or
                     !mir.ValueType.eql(expression.result_ty, signature.return_ty))
                 {
-                    return false;
+                    return FunctionDecline.at("call-shape", "a call whose signature does not match", symbol.spelling);
                 }
                 for (call.arguments[0..call.argument_count], signature.param_types) |argument_id, parameter_ty| {
-                    if (!argument_id.isValid() or argument_id.index() >= body.expressions.len) return false;
+                    if (!argument_id.isValid() or argument_id.index() >= body.expressions.len)
+                        return FunctionDecline.at("call-shape", "a call to", symbol.spelling);
                     const argument_ty = body.expressions[argument_id.index()].result_ty;
                     if (!mir.ValueType.eql(argument_ty, parameter_ty)) {
-                        if (signature.c_abi) return false;
-                        switch (mir.ExecutableCastKind.classify(argument_ty, parameter_ty) orelse return false) {
+                        if (signature.c_abi)
+                            return FunctionDecline.at("call-shape", "a C-ABI argument of type", @tagName(argument_ty));
+                        switch (mir.ExecutableCastKind.classify(argument_ty, parameter_ty) orelse
+                            return FunctionDecline.at("call-shape", "an argument of type", @tagName(argument_ty)))
+                        {
                             .pointer_to_nullable, .pointer_const_narrow => {},
-                            else => return false,
+                            else => return FunctionDecline.at("call-shape", "an implicitly converted argument of type", @tagName(argument_ty)),
                         }
                     }
                 }
             },
             else => {},
         };
-        return true;
+        return null;
     }
 
     fn mirFunctionByName(self: *const CEmitter, name: []const u8) ?mir.Function {
@@ -2173,6 +2204,16 @@ pub const CEmitter = struct {
 
     fn writeIndent(self: *CEmitter) !void {
         for (0..self.indent) |_| try self.out.appendSlice(self.allocator, "    ");
+    }
+
+    fn reportFunctionDecline(self: *CEmitter, span: ast_bridge.Span, function_name: []const u8, decline: FunctionDecline) void {
+        if (self.reporter) |reporter| {
+            reporter.err(
+                span,
+                "E_BACKEND_UNSUPPORTED: C backend does not yet support {s} `{s}` in `{s}` (declined by {s})",
+                .{ decline.category, decline.construct, function_name, decline.phase },
+            );
+        }
     }
 
     fn reportUnsupported(self: *CEmitter, span: ast_bridge.Span, construct: []const u8) void {
