@@ -1058,11 +1058,11 @@ fn emitExpressionOperation(
             // struct from the operand's parts, evaluating the operand once.
             if (sliceConstNarrowCast(body, expression.result_ty, cast.operand)) |operand| {
                 try out.appendSlice(allocator, "({ ");
-                try appendSliceCType(allocator, out, operand.result_ty);
+                try appendSliceCType(allocator, out, body, operand.result_ty);
                 try out.print(allocator, " mc_cast_tmp_{d} = ", .{expression.id.raw});
                 try emitExpression(allocator, out, body, cast.operand, depth + 1);
                 try out.appendSlice(allocator, "; (");
-                try appendSliceCType(allocator, out, expression.result_ty);
+                try appendSliceCType(allocator, out, body, expression.result_ty);
                 try out.print(allocator, "){{ .ptr = mc_cast_tmp_{d}.ptr, .len = mc_cast_tmp_{d}.len }}; }})", .{ expression.id.raw, expression.id.raw });
                 return;
             }
@@ -2444,15 +2444,10 @@ fn rangeSliceSupported(
         .pointer => |shape| if (shape.kind == .slice) shape else return false,
         else => return false,
     };
-    // The renderer spells the constructed slice's type inline as
-    // `mc_slice_<mutability>_<child>`, which is a C identifier only for a
-    // primitive element. A pointer element names a *mangled* typedef the
-    // declaration collector frames, and the body renderer has no access to
-    // that name -- so admitting one here produces text that is not C. This
-    // was invisible while `indexSupported` declined a slice of pointers
-    // first; it is the refusal that now reports the gap instead of the
-    // renderer failing internally.
-    if (primitiveType(result.child) == null) return false;
+    // The constructed slice's type has to be nameable: `appendSliceCType`
+    // builds the same typedef name the declaration collector frames, which it
+    // can do for any element whose type suffix it can render.
+    if (sliceElementValueType(body, result.child) == null) return false;
     const bound: ?usize = switch (base.result_ty) {
         .array => |array| array_shape: {
             const length = array.length orelse return false;
@@ -2524,7 +2519,7 @@ fn emitRangeSlice(
     };
     try out.appendSlice(allocator, "({ ");
     if (bind_base) {
-        try appendSliceCType(allocator, out, base.result_ty);
+        try appendSliceCType(allocator, out, body, base.result_ty);
         try out.print(allocator, " mc_range_base_{d} = ", .{id});
         try emitExpression(allocator, out, body, operation.base, depth + 1);
         try out.appendSlice(allocator, "; ");
@@ -2545,7 +2540,7 @@ fn emitRangeSlice(
         .{ id, id, id, id },
     );
     try out.appendSlice(allocator, "; (");
-    try appendSliceCType(allocator, out, expression.result_ty);
+    try appendSliceCType(allocator, out, body, expression.result_ty);
     try out.print(allocator, "){{ .ptr = ", .{});
     if (bind_base) {
         try out.print(allocator, "mc_range_base_{d}.ptr", .{id});
@@ -2576,17 +2571,46 @@ fn sliceConstNarrowCast(body: *const mir.ExecutableBody, target_ty: mir.ValueTyp
     return operand;
 }
 
+/// The element type a slice's `PointerShape.child` spelling names.
+///
+/// `pointeeValueType` answers for the scalar and struct elements. A pointer
+/// element is inverted through the one spelling rule,
+/// `mir.pointerShapeFromSpelling`, and that is what lets the body renderer
+/// *name* the mangled typedef a pointer element needs
+/// (`mc_slice_mut_mc_type_ptr_m_3_u32`) instead of pasting the element's
+/// spelling into a C identifier.
+fn sliceElementValueType(body: *const mir.ExecutableBody, child: []const u8) ?mir.ValueType {
+    if (pointeeValueType(body, child)) |ty| return ty;
+    const shape = mir.pointerShapeFromSpelling(child) orelse return null;
+    return .{ .pointer = shape };
+}
+
+/// The generated slice typedef's name.
+///
+/// The declaration collector frames it as `mc_slice_<mutability>_` plus the
+/// element's type suffix (`lower_c_names.sliceTypeName` over
+/// `lower_c_names.typeSuffix`); this is the same rule over the MIR element
+/// type, so the two agree character for character. Spelling the element
+/// inline instead -- which is what this did -- produces a C identifier only
+/// when the element's suffix happens to be its spelling, which is true for a
+/// primitive and for nothing else.
 fn appendSliceCType(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
     ty: mir.ValueType,
 ) (RenderError || std.mem.Allocator.Error)!void {
     const shape = switch (ty) {
         .pointer => |shape| if (shape.kind == .slice) shape else return error.UnsupportedType,
         else => return error.UnsupportedType,
     };
-    if (primitiveType(shape.child) == null) return error.UnsupportedType;
-    try out.print(allocator, "mc_slice_{s}_{s}", .{ @tagName(shape.mutability), shape.child });
+    const element = sliceElementValueType(body, shape.child) orelse return error.UnsupportedType;
+    // The collector's mutability rule is two-valued: a mutable slice, and
+    // everything else. `@tagName` produced `mc_slice_none_...` for a slice
+    // whose own mutability is unspelled, which nothing declares -- invisible
+    // while only a primitive element ever got this far.
+    try out.print(allocator, "mc_slice_{s}_", .{if (shape.mutability == .mut) "mut" else "const"});
+    try appendCTypeSuffix(allocator, out, body, element);
 }
 
 fn projectionRootIsLocalArray(body: *const mir.ExecutableBody, start: mir.ExprId) bool {
@@ -3018,7 +3042,7 @@ fn emitBuiltinCall(
         .byte_view_as_bytes => {
             if (call.argument_count != 1) return error.InvalidExpression;
             try out.appendSlice(allocator, "((");
-            try appendSliceCType(allocator, out, result_ty);
+            try appendSliceCType(allocator, out, body, result_ty);
             try out.appendSlice(allocator, "){ .ptr = (uint8_t const *)(void *)(");
             try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
             try out.appendSlice(allocator, "), .len = (uintptr_t)sizeof(*(");
@@ -5081,11 +5105,11 @@ fn emitPreparedArgumentsForSignature(allocator: std.mem.Allocator, out: *std.Arr
                 continue;
             }
             try out.appendSlice(allocator, "({ ");
-            try appendSliceCType(allocator, out, operand.result_ty);
+            try appendSliceCType(allocator, out, body, operand.result_ty);
             try out.print(allocator, " mc_arg_tmp_{d} = ", .{argument.raw});
             try emitExpression(allocator, out, body, argument, 0);
             try out.appendSlice(allocator, "; (");
-            try appendSliceCType(allocator, out, signature.?.parameter_types[index]);
+            try appendSliceCType(allocator, out, body, signature.?.parameter_types[index]);
             try out.print(allocator, "){{ .ptr = mc_arg_tmp_{d}.ptr, .len = mc_arg_tmp_{d}.len }}; }})", .{ argument.raw, argument.raw });
             continue;
         }
@@ -5517,7 +5541,7 @@ fn emitStringLiteral(
     switch (ty) {
         .pointer => |shape| if (shape.kind == .slice) {
             try out.appendSlice(allocator, "((");
-            try appendSliceCType(allocator, out, ty);
+            try appendSliceCType(allocator, out, body, ty);
             try out.appendSlice(allocator, "){ .ptr = (");
             try out.appendSlice(allocator, primitiveType(shape.child) orelse return error.UnsupportedType);
             try out.appendSlice(allocator, if (shape.mutability == .@"const") " const *)" else " *)");

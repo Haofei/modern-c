@@ -20,3 +20,11 @@ fn read_slice_of_const_pointers(items: []const *const u32, index: usize) -> *con
 fn pass_slice_of_pointers(items: []*mut u32) -> usize {
     return items.len;
 }
+
+// Constructing a slice whose elements are pointers. The body renderer used to
+// spell the constructed slice's type inline, which is a C identifier only for
+// a primitive element; it names the same mangled typedef the declaration
+// collector frames now.
+fn range_slice_of_pointers(items: []*mut u32, start: usize, end: usize) -> []*mut u32 {
+    return items[start..end];
+}
