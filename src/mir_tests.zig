@@ -3832,6 +3832,18 @@ fn functionHasInstruction(function: mir.Function, kind: mir.Instruction.Kind, de
     return false;
 }
 
+/// Whether the builder recorded this MMIO refusal for the function. The
+/// finding list replaced the `mmio_check` instruction this used to look for.
+fn functionHasMmioFinding(function: mir.Function, finding: mir.MmioFinding) bool {
+    for (function.findings) |recorded| {
+        switch (recorded.kind) {
+            .mmio => |mmio| if (mmio == finding) return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
 fn functionHasTerminator(function: mir.Function, kind: std.meta.Tag(mir.Terminator)) bool {
     for (function.blocks) |block| {
         if (std.meta.activeTag(block.terminator) == kind) return true;
@@ -13292,9 +13304,9 @@ test "MIR builds mmio call instructions for an accepted irq-context function" {
 
 test "MIR pairs each typed MMIO access with the check that guards it" {
     // `tests/mir_verify/mir_mmio_access.expect` proves which accesses the
-    // verifier forbids. The `mmio_check` instruction that carries the
-    // obligation is a fact about the stream, not about the finding, and an
-    // accepted access is the interesting case: it must carry NO check.
+    // verifier forbids. This pairs each typed MMIO *call* with the refusal
+    // recorded beside it, which the dump does not show as a pair, and the
+    // accepted access is the interesting case: it must carry NO refusal.
     const allocator = std.testing.allocator;
     const source = try verifyFixtureSource(allocator, "mir_mmio_access.mc");
     defer allocator.free(source);
@@ -13310,13 +13322,13 @@ test "MIR pairs each typed MMIO access with the check that guards it" {
     const reject_write_fn = functionByName(typed_mir, "reject_write_read_only").?;
     const accept_fn = functionByName(typed_mir, "accept_read_write").?;
     try std.testing.expect(functionHasInstruction(reject_read_fn, .call, "mmio.read"));
-    try std.testing.expect(functionHasInstruction(reject_read_fn, .mmio_check, "read"));
+    try std.testing.expect(functionHasMmioFinding(reject_read_fn, .read));
     try std.testing.expect(functionHasInstruction(reject_write_fn, .call, "mmio.write"));
-    try std.testing.expect(functionHasInstruction(reject_write_fn, .mmio_check, "write"));
+    try std.testing.expect(functionHasMmioFinding(reject_write_fn, .write));
     try std.testing.expect(functionHasInstruction(accept_fn, .call, "mmio.write"));
     try std.testing.expect(functionHasInstruction(accept_fn, .call, "mmio.read"));
-    try std.testing.expect(!functionHasInstruction(accept_fn, .mmio_check, "read"));
-    try std.testing.expect(!functionHasInstruction(accept_fn, .mmio_check, "write"));
+    try std.testing.expect(!functionHasMmioFinding(accept_fn, .read));
+    try std.testing.expect(!functionHasMmioFinding(accept_fn, .write));
 }
 
 test "MIR records the result type of a no_overflow range fact" {

@@ -739,6 +739,31 @@ fn appendFindingRows(allocator: std.mem.Allocator, function: Function, out: *std
             // `ffi` and `usage` print no verification-fact row: neither had
             // one when the finding was an instruction, and adding one now
             // would be a new assertion, not a preserved one.
+            .unsafe_required => |operation| try out.print(
+                allocator,
+                "mir verify fn={s} pass=unsafe finding=unsafe_required detail={s} line={} column={}\n",
+                .{ function.name, operation, source.line, source.column },
+            ),
+            .address_deref => |class| try out.print(
+                allocator,
+                "mir verify fn={s} pass=address finding=direct_deref class={s} line={} column={}\n",
+                .{ function.name, mir_model.addressClassName(class), source.line, source.column },
+            ),
+            .address_conversion => |mismatch| try out.print(
+                allocator,
+                "mir verify fn={s} pass=address finding=address_class_mismatch source={s} target={s} line={} column={}\n",
+                .{ function.name, mir_model.addressClassName(mismatch.source), mir_model.addressClassName(mismatch.target), source.line, source.column },
+            ),
+            .address_operation => |operation| try out.print(
+                allocator,
+                "mir verify fn={s} pass=address finding=opaque_operation detail={s} line={} column={}\n",
+                .{ function.name, operation, source.line, source.column },
+            ),
+            .mmio => |mmio| try out.print(
+                allocator,
+                "mir verify fn={s} pass=mmio finding=access_forbidden op={s} line={} column={}\n",
+                .{ function.name, @tagName(mmio), source.line, source.column },
+            ),
             .ffi, .usage => {},
             .nullability => |nullability| try out.print(
                 allocator,
@@ -818,45 +843,6 @@ pub fn appendVerificationFactsFromMir(allocator: std.mem.Allocator, mir: Module,
         for (function.blocks) |block| {
             for (block.instructions) |instruction| {
                 const source = instructionSourcePoint(function, instruction) orelse return error.InvalidSpanReference;
-                if (instruction.kind != .unsafe_check) continue;
-                try out.print(
-                    allocator,
-                    "mir verify fn={s} pass=unsafe finding=unsafe_required detail={s} line={} column={}\n",
-                    .{ function.name, instruction.detail, source.line, source.column },
-                );
-            }
-        }
-        for (function.blocks) |block| {
-            for (block.instructions) |instruction| {
-                const source = instructionSourcePoint(function, instruction) orelse return error.InvalidSpanReference;
-                if (instruction.kind == .address_deref) {
-                    try out.print(
-                        allocator,
-                        "mir verify fn={s} pass=address finding=direct_deref class={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, source.line, source.column },
-                    );
-                }
-                if (instruction.kind == .address_conversion) {
-                    try out.print(
-                        allocator,
-                        "mir verify fn={s} pass=address finding=address_class_mismatch source={s} target={s} line={} column={}\n",
-                        .{ function.name, instruction.result_ty.name(), instruction.detail, source.line, source.column },
-                    );
-                }
-                if (instruction.kind == .address_operation) {
-                    try out.print(
-                        allocator,
-                        "mir verify fn={s} pass=address finding=opaque_operation detail={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, source.line, source.column },
-                    );
-                }
-                if (instruction.kind == .mmio_check) {
-                    try out.print(
-                        allocator,
-                        "mir verify fn={s} pass=mmio finding=access_forbidden op={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, source.line, source.column },
-                    );
-                }
                 if (irqContextCallFinding(mir, function, instruction)) |finding| {
                     try out.print(
                         allocator,

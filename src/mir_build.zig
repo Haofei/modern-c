@@ -11910,7 +11910,7 @@ pub const FunctionBuilder = struct {
                     }
                 }
                 if (self.isMmioRegisterExpr(node.target)) {
-                    try self.addInstr(.mmio_check, "direct_assign", .value, stmt.span);
+                    try self.addFinding(.{ .mmio = .direct_assign }, stmt.span);
                 }
                 try self.addAssignmentTargetCheck(node.target);
                 {
@@ -12084,7 +12084,7 @@ pub const FunctionBuilder = struct {
                         self.executable_incomplete_reason = .unsupported_opaque_asm;
                     try self.appendExecutableStatement(self.sourcePoint(stmt.span), .unsupported);
                 }
-                if (!self.active_unsafe) try self.addInstr(.unsafe_check, "asm.opaque", .unknown, stmt.span);
+                if (!self.active_unsafe) try self.addFinding(.{ .unsafe_required = "asm.opaque" }, stmt.span);
                 try self.addInstr(.asm_effect, "opaque", .value, stmt.span);
                 self.linkLastExecutableStatementToLastInstruction();
                 if (self.naked) {
@@ -13744,10 +13744,10 @@ pub const FunctionBuilder = struct {
                     .operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(inner.*).span)),
                 } });
                 if (!self.active_unsafe and isRawManyPointerValue(inner_ty)) {
-                    try self.addInstr(.unsafe_check, "raw_many.deref", .unknown, expr.span);
+                    try self.addFinding(.{ .unsafe_required = "raw_many.deref" }, expr.span);
                 }
                 if (inner_ty == .address) {
-                    try self.addInstr(.address_deref, inner_ty.name(), inner_ty, expr.span);
+                    try self.addFinding(.{ .address_deref = inner_ty.address }, expr.span);
                 }
                 if (isMirCVoidPointer(inner_ty)) {
                     try self.addFinding(.{ .ffi = .c_void_deref }, expr.span);
@@ -13804,7 +13804,7 @@ pub const FunctionBuilder = struct {
                     try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.expr.*).span));
                 try self.addUnaryOperatorChecks(node, expr.span);
                 if (node.op == .bit_not and self.exprType(node.expr.*) == .address) {
-                    try self.addInstr(.address_operation, @tagName(node.op), self.exprType(node.expr.*), expr.span);
+                    try self.addFinding(.{ .address_operation = @tagName(node.op) }, expr.span);
                 }
                 if (node.op == .bit_not and self.exprHasForbiddenBitwiseDomain(node.expr.*)) {
                     try self.addFinding(.{ .arithmetic_domain = .bitwise_arith_domain_operand }, expr.span);
@@ -13829,7 +13829,7 @@ pub const FunctionBuilder = struct {
                 instruction.typed_right_operand_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.right.*).span));
                 try self.addBinaryOperatorChecks(node, expr.span);
                 if (binaryChecksAddressClass(node.op) and (self.exprType(node.left.*) == .address or self.exprType(node.right.*) == .address)) {
-                    try self.addInstr(.address_operation, @tagName(node.op), .value, expr.span);
+                    try self.addFinding(.{ .address_operation = @tagName(node.op) }, expr.span);
                 }
                 try self.addArithmeticDomainChecks(node, expr.span);
                 if (binaryMayOverflow(node.op) and !self.binaryIsNoTrapArithmeticDomain(node) and !self.binaryIsFloat(node)) {
@@ -14282,13 +14282,16 @@ pub const FunctionBuilder = struct {
                     try self.appendTargetTypeFact(result_kind, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (!self.active_unsafe and isUnsafeOperationCall(node.callee.*)) {
-                    try self.addInstr(.unsafe_check, callee_name, .unknown, expr.span);
+                    try self.addFinding(.{ .unsafe_required = callee_name }, expr.span);
                 }
                 if (self.mmioReceiverAccessInfo(node.callee.*)) |access_info| {
                     if ((access_info.op == .read and !access_info.access.allowsRead()) or
                         (access_info.op == .write and !access_info.access.allowsWrite()))
                     {
-                        try self.addInstr(.mmio_check, @tagName(access_info.op), .value, expr.span);
+                        try self.addFinding(.{ .mmio = switch (access_info.op) {
+                            .read => .read,
+                            .write => .write,
+                        } }, expr.span);
                     }
                 }
                 if ((instr_kind == .call or instr_kind == .indirect_call) and representationCheckKind(call_ty) != null) {
@@ -17130,7 +17133,7 @@ pub const FunctionBuilder = struct {
                 .address => |kind| kind,
                 else => unreachable,
             };
-            try self.addInstr(.address_conversion, addressClassName(target_class), .{ .address = source_class }, span);
+            try self.addFinding(.{ .address_conversion = .{ .target = target_class, .source = source_class } }, span);
             return;
         }
         if (mirTypesAreCompatible(target_ty, source_ty)) return;

@@ -5095,6 +5095,23 @@ pub const UsageFinding = enum {
     local_address_escape,
 };
 
+/// One MMIO-access refusal. `direct_assign` is a store written through the
+/// register value itself; `read` and `write` are accesses the register's
+/// Reg/RegBits mode does not allow.
+pub const MmioFinding = enum {
+    direct_assign,
+    read,
+    write,
+};
+
+/// An address-class conversion that is refused, and the two classes that make
+/// it one. Both are needed: `addressClassMismatchDiagnostic` reads the pair,
+/// not either half.
+pub const AddressClassMismatch = struct {
+    target: AddressClass,
+    source: AddressClass,
+};
+
 /// What a refusal *is*, as a value rather than as a string.
 ///
 /// One arm per finding family. A family whose diagnostic needs more than the
@@ -5111,6 +5128,20 @@ pub const FindingKind = union(enum) {
     nullability: NullabilityFinding,
     ffi: FfiFinding,
     usage: UsageFinding,
+    mmio: MmioFinding,
+    address_deref: AddressClass,
+    address_conversion: AddressClassMismatch,
+    /// The operator spelling, not a classification: `@tagName` of the AST
+    /// unary or binary operator the address class does not define. Every one
+    /// of them is `E_ADDRESS_CLASS_OPERATION`, and the spelling is what the
+    /// verification-fact dump names.
+    address_operation: []const u8,
+    /// The operation that needed an `unsafe` context -- a callee name such as
+    /// `raw.load`, or `asm.opaque` / `raw_many.deref` for the two forms that
+    /// are not calls. A name, like an instruction's value id, and not
+    /// something the diagnostic switches on: there is one diagnostic,
+    /// `E_UNSAFE_REQUIRED`.
+    unsafe_required: []const u8,
 };
 
 /// A refusal the MIR builder recorded while lowering a body.

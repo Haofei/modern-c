@@ -229,10 +229,29 @@ pub fn addressDerefDiagnostic(kind: mir_model.AddressClass) []const u8 {
     };
 }
 
-pub fn addressClassMismatchDiagnostic(target: mir_model.AddressClass, source: mir_model.AddressClass) []const u8 {
-    if (source == .dma_addr and target == .paddr) return "E_DMA_ADDR_NOT_PADDR";
-    if (source == .dma_addr and target == .vaddr) return "E_DMA_ADDR_NOT_VADDR";
+pub fn addressClassMismatchDiagnostic(mismatch: mir_model.AddressClassMismatch) []const u8 {
+    if (mismatch.source == .dma_addr and mismatch.target == .paddr) return "E_DMA_ADDR_NOT_PADDR";
+    if (mismatch.source == .dma_addr and mismatch.target == .vaddr) return "E_DMA_ADDR_NOT_VADDR";
     return "E_ADDRESS_CLASS_MISMATCH";
+}
+
+/// The diagnostic an MMIO-access finding is reported as. A direct assignment
+/// is its own refusal; a read or a write the register's mode forbids share
+/// one code, because the mode is what that message names.
+pub fn mmioDiagnostic(finding: mir_model.MmioFinding) []const u8 {
+    return switch (finding) {
+        .direct_assign => "E_MMIO_DIRECT_ASSIGN",
+        .read, .write => "E_MMIO_ACCESS_FORBIDDEN",
+    };
+}
+
+/// The message an MMIO refusal carries. The two codes do not share a
+/// sentence, so the finding chooses both halves together.
+pub fn mmioMessage(finding: mir_model.MmioFinding) []const u8 {
+    return switch (finding) {
+        .direct_assign => "MIR verifier found direct assignment to an MMIO register",
+        .read, .write => "MIR verifier found MMIO register access disallowed by Reg/RegBits mode",
+    };
 }
 
 /// The diagnostic a `c_void` FFI finding is reported as. The chain this

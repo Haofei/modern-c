@@ -53,6 +53,9 @@ const ValueId = mir_model.ValueId;
 const ValueType = mir_model.ValueType;
 const addressClassFromName = mir_type.addressClassFromName;
 const addressClassMismatchDiagnostic = mir_verify_util.addressClassMismatchDiagnostic;
+const addressClassName = mir_model.addressClassName;
+const mmioDiagnostic = mir_verify_util.mmioDiagnostic;
+const mmioMessage = mir_verify_util.mmioMessage;
 const addressDerefDiagnostic = mir_verify_util.addressDerefDiagnostic;
 const aggregateDiagnostic = mir_verify_util.aggregateDiagnostic;
 const alignOverlayStorage = mir_facade.alignOverlayStorage;
@@ -138,55 +141,6 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                         .{},
                     );
                 }
-                if (instruction.kind == .unsafe_check) {
-                    reporter.err(
-                        sourcePointSpan(source),
-                        "E_UNSAFE_REQUIRED: MIR verifier found unsafe machine effect outside unsafe context",
-                        .{},
-                    );
-                }
-                if (instruction.kind == .address_deref) {
-                    const address_class = addressClassFromName(instruction.detail) orelse .paddr;
-                    reporter.err(
-                        sourcePointSpan(source),
-                        "{s}: MIR verifier found illegal direct dereference of {s}",
-                        .{ addressDerefDiagnostic(address_class), instruction.detail },
-                    );
-                }
-                if (instruction.kind == .address_conversion) {
-                    const source_class = switch (instruction.result_ty) {
-                        .address => |kind| kind,
-                        else => .paddr,
-                    };
-                    const target_class = addressClassFromName(instruction.detail) orelse .paddr;
-                    reporter.err(
-                        sourcePointSpan(source),
-                        "{s}: MIR verifier found invalid address-class conversion",
-                        .{addressClassMismatchDiagnostic(target_class, source_class)},
-                    );
-                }
-                if (instruction.kind == .address_operation) {
-                    reporter.err(
-                        sourcePointSpan(source),
-                        "E_ADDRESS_CLASS_OPERATION: MIR verifier found illegal operation on opaque address class",
-                        .{},
-                    );
-                }
-                if (instruction.kind == .mmio_check) {
-                    if (std.mem.eql(u8, instruction.detail, "direct_assign")) {
-                        reporter.err(
-                            sourcePointSpan(source),
-                            "E_MMIO_DIRECT_ASSIGN: MIR verifier found direct assignment to an MMIO register",
-                            .{},
-                        );
-                    } else {
-                        reporter.err(
-                            sourcePointSpan(source),
-                            "E_MMIO_ACCESS_FORBIDDEN: MIR verifier found MMIO register access disallowed by Reg/RegBits mode",
-                            .{},
-                        );
-                    }
-                }
                 if (isRepresentationSensitiveProducer(instruction) and !producerHasDominatingRepresentationCheck(block, instruction_index, instruction.result_ty)) {
                     reporter.err(
                         sourcePointSpan(source),
@@ -237,6 +191,31 @@ fn reportFindings(function: Function, reporter: *diagnostics.Reporter) void {
                 sourcePointSpan(source),
                 "{s}: MIR verifier found invalid arithmetic-domain operation",
                 .{arithmeticDomainDiagnostic(domain)},
+            ),
+            .unsafe_required => reporter.err(
+                sourcePointSpan(source),
+                "E_UNSAFE_REQUIRED: MIR verifier found unsafe machine effect outside unsafe context",
+                .{},
+            ),
+            .address_deref => |class| reporter.err(
+                sourcePointSpan(source),
+                "{s}: MIR verifier found illegal direct dereference of {s}",
+                .{ addressDerefDiagnostic(class), addressClassName(class) },
+            ),
+            .address_conversion => |mismatch| reporter.err(
+                sourcePointSpan(source),
+                "{s}: MIR verifier found invalid address-class conversion",
+                .{addressClassMismatchDiagnostic(mismatch)},
+            ),
+            .address_operation => reporter.err(
+                sourcePointSpan(source),
+                "E_ADDRESS_CLASS_OPERATION: MIR verifier found illegal operation on opaque address class",
+                .{},
+            ),
+            .mmio => |mmio| reporter.err(
+                sourcePointSpan(source),
+                "{s}: {s}",
+                .{ mmioDiagnostic(mmio), mmioMessage(mmio) },
             ),
             .ffi => |ffi| reporter.err(
                 sourcePointSpan(source),
