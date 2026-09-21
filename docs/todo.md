@@ -581,6 +581,15 @@ instructions by their `detail` string. One real reader remains:
   Labels got *more* accurate in the move: the string test misread a parameter
   named `int` as an integer literal, and never recognised a boolean literal at
   all (`exprText` spells it `bool`).
+- **`mir_build.zig` has no reader left to move.** Its five `.detail`
+  occurrences were accounted for one by one: two are prose in the doc comments
+  on `linkExecutableStatement` and `linkExecutableExpressionForExpr`, two are
+  *writes* -- `.detail = detail` on the `Instruction` and on the
+  `RepresentationFact` it constructs in the same place -- and one is the
+  cross-check below. `defaultInstructionValueId(kind, detail)` looks like a
+  sixth and is not: it uses `detail` as the callee or load *spelling* for a
+  `call` / `indirect_call` / `typed_load`, which is a value name, not a
+  classification.
 - **`mir_build.zig`'s `addCallTargetFact`** checks that the instruction it just
   emitted really is the `call_target` the fact claims. That is a cross-check
   *between* the two representations; it should go when the stream does.
