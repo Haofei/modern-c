@@ -1214,14 +1214,62 @@ fn countCallTargetFactsForObligation(function: Function, id: mir_model.InstId) u
 /// closure value.  They deliberately validate only facts available in MIR;
 /// consumers never need to rediscover the capture or target from an AST body.
 pub fn validateBindThunkFactsForLowering(module: Module) error{InvalidMirBindThunkFacts}!void {
-    for (module.functions) |function| for (function.bind_thunk_facts) |fact| {
-        if (!bindThunkFactIdentitiesValid(function, fact)) return error.InvalidMirBindThunkFacts;
-        if (countBindThunkFactsSharingIdentity(function, fact) != 1) return error.InvalidMirBindThunkFacts;
-        const target = functionByTargetOwnerForBind(module, function, fact.typed_target_fn_symbol_id) orelse return error.InvalidMirBindThunkFacts;
-        if (target.param_count != fact.target_param_count or !typeIdMatchesValueType(function, fact.target_return_ty, target.return_ty)) return error.InvalidMirBindThunkFacts;
-        if (fact.target_param_count != fact.closure_param_count + 1 or !fact.target_return_ty.eql(fact.closure_return_ty)) return error.InvalidMirBindThunkFacts;
-        if (!bindFactHasTargetType(function, fact) or !bindFactHasCallTarget(function, fact) or !bindFactHasCaptureAccess(function, fact) or !bindFactHasClosureLocal(function, fact)) return error.InvalidMirBindThunkFacts;
+    for (module.functions) |function| {
+        const typed = typedObligationsRepresented(module, function);
+        for (function.bind_thunk_facts) |fact| {
+            if (!bindThunkFactIdentitiesValid(function, fact)) return error.InvalidMirBindThunkFacts;
+            if (countBindThunkFactsSharingIdentity(function, fact) != 1) return error.InvalidMirBindThunkFacts;
+            const target = functionByTargetOwnerForBind(module, function, fact.typed_target_fn_symbol_id) orelse return error.InvalidMirBindThunkFacts;
+            if (target.param_count != fact.target_param_count or !typeIdMatchesValueType(function, fact.target_return_ty, target.return_ty)) return error.InvalidMirBindThunkFacts;
+            if (fact.target_param_count != fact.closure_param_count + 1 or !fact.target_return_ty.eql(fact.closure_return_ty)) return error.InvalidMirBindThunkFacts;
+            if (!bindFactHasTargetType(function, fact) or !bindFactHasCallTarget(function, fact) or !bindFactHasCaptureAccess(function, fact)) return error.InvalidMirBindThunkFacts;
+            const closure_local = if (typed)
+                bindFactHasTypedClosureLocal(function, fact)
+            else
+                bindFactHasClosureLocal(function, fact);
+            if (!closure_local) return error.InvalidMirBindThunkFacts;
+        }
+    }
+}
+
+/// The closure local a bind fact names, found in the typed body.
+///
+/// `BindThunkFact` names it by `closure_value_id`, and `.local` is a joinable
+/// instruction kind -- so this half was never blocked on a missing node, only
+/// on a missing *correspondence*: `ExecutableLocalIdentity` carried no
+/// `ValueId`, and joining by spelling would have been weaker than the
+/// instruction join it replaces. It carries one now.
+///
+/// A `ValueId` is a name and a `LocalId` is a declaration generation, so a
+/// name reused after its scope ends gives several locals one `ValueId`. The
+/// disambiguator is the same thing the instruction join used: the closure
+/// local is the one whose initializer is the bind expression itself, at
+/// `closure_span_id`. Storage type and span are checked exactly as before, so
+/// the typed join proves at least as much.
+fn bindFactHasTypedClosureLocal(function: Function, fact: BindThunkFact) bool {
+    const body = &function.executable_body;
+    var count: usize = 0;
+    for (body.locals) |local| {
+        if (!local.value_id.isValid() or !local.value_id.eql(fact.closure_value_id)) continue;
+        if (!local.type_id.eql(fact.closure_ty)) continue;
+        if (!typedLocalInitializedAt(body, local.id, fact.closure_span_id)) continue;
+        count += 1;
+    }
+    return count == 1;
+}
+
+/// Is `local` initialized by an expression at `span_id`?
+fn typedLocalInitializedAt(body: *const mir_model.ExecutableBody, local: mir_model.LocalId, span_id: SpanId) bool {
+    for (body.statements) |statement| switch (statement.operation) {
+        .local_init => |init| {
+            if (!init.local.eql(local)) continue;
+            const value = init.value orelse continue;
+            if (value.index() >= body.expressions.len) continue;
+            if (body.expressions[value.index()].span_id.eql(span_id)) return true;
+        },
+        else => {},
     };
+    return false;
 }
 
 /// One bind instruction, one bind fact; counted on the identity.
@@ -1296,6 +1344,8 @@ fn bindFactHasCaptureAccess(function: Function, fact: BindThunkFact) bool {
     return operand.kind == .expr and operand.typed_value_id != null and operand.typed_value_id.?.eql(fact.capture_value_id);
 }
 
+/// Used only for the bodies the typed form does not represent; see
+/// `bindFactHasTypedClosureLocal`.
 fn bindFactHasClosureLocal(function: Function, fact: BindThunkFact) bool {
     var count: usize = 0;
     for (function.blocks) |block| for (block.instructions) |instruction| {

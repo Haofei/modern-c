@@ -7913,7 +7913,11 @@ pub const FunctionBuilder = struct {
         // declaration gets a fresh monotonically increasing identity while
         // the lookup map points expressions at the currently visible one.
         const id = LocalId.fromIndex(self.executable_locals.items.len);
-        try self.executable_locals.append(self.allocator, .{ .id = id, .spelling = spelling });
+        try self.executable_locals.append(self.allocator, .{
+            .id = id,
+            .spelling = spelling,
+            .value_id = try self.internValueId(spelling),
+        });
         try self.executable_local_ids.put(spelling, id);
         return id;
     }
@@ -7956,7 +7960,12 @@ pub const FunctionBuilder = struct {
             "__mc_deref_pointer"
         else
             return error.InvalidSyntheticLocal;
-        try self.executable_locals.append(self.allocator, .{ .id = id, .spelling = spelling, .kind = .synthetic });
+        try self.executable_locals.append(self.allocator, .{
+            .id = id,
+            .spelling = spelling,
+            .value_id = try self.internValueId(spelling),
+            .kind = .synthetic,
+        });
         return id;
     }
 

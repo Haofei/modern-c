@@ -83,7 +83,7 @@ Not yet typed — the honest list:
   | representation | a row of `ExecutableBody.representation_obligations`, naming the node that owns it | the typed body |
   | range | `ExecutableExpression.range_obligation` (region, span, result type and the typed operation) | the typed body |
   | const_get | `ExecutableExpression.const_get_obligation`; the index is the node's own `builtin_call.const_index` | the typed body |
-  | bind thunk | -- | the instruction stream |
+  | bind thunk | its target-type and call-target halves, plus `ExecutableLocalIdentity.value_id` for the closure local | the typed body |
 
   A family whose verifier reads the typed body may still fall back to the
   stream for a body the typed form does not represent -- an incomplete body,

@@ -2052,6 +2052,18 @@ pub const ExecutableLocalKind = enum {
 pub const ExecutableLocalIdentity = struct {
     id: LocalId,
     spelling: []const u8,
+    /// The interned identity of this local's name, the same `ValueId` the
+    /// legacy `local` instruction carries in `typed_value_id`.
+    ///
+    /// It exists so a fact that names a local by `ValueId` -- `BindThunkFact`
+    /// names the closure local by `closure_value_id` -- can join the typed
+    /// body by a recorded correspondence instead of by comparing `spelling`,
+    /// which would be a weaker claim than the instruction join it replaces.
+    /// A `LocalId` is a declaration generation and a `ValueId` is a name, so
+    /// several locals may share one when a name is reused after its scope
+    /// ends; a consumer must disambiguate on something else, as
+    /// `bindFactHasClosureLocal` does with the initializer's span.
+    value_id: ValueId = .invalid,
     /// Storage type and its executable-MIR identity.  This is redundant with
     /// the owning parameter/local-init operation on purpose: local-slot and
     /// debug consumers address a `LocalId` directly and must not rescan an

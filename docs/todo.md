@@ -106,7 +106,7 @@ that the typed body does not represent as a node at all:
 | call-target | `call_target` | **Done.** Joins `ExecutableExpression.call_target_obligation`, or `ExecutableTerminator.call_target_obligation` for a diverging explicit trap; see below. |
 | range | `unchecked_assume` inside a `no_overflow` contract region | **Done.** Joins `ExecutableExpression.range_obligation`; several facts name one obligation, one per target label. |
 | access facts | `index` / `expr` | No. |
-| bind-thunk | `call_target` and `target_type`; its closure-local half really is `.local`, a joinable kind | No, for a different reason: `BindThunkFact` names the closure local by `closure_value_id`, and `ExecutableLocalIdentity` carries no `ValueId`. There is no recorded correspondence to join on, and joining by spelling would be weaker than what is there. |
+| bind-thunk | `call_target` and `target_type`; its closure-local half really is `.local`, a joinable kind | **Done.** `ExecutableLocalIdentity` carries a `ValueId` now, so the closure local joins by a recorded correspondence rather than by spelling; see below. |
 | ownership events | none -- `verifyFunctionOwnershipEvents` does not walk the stream | Already off it. |
 | trap projection | none in `mir_verify` -- the typed body owns `trap_edges`, and a refusal is reported as `incoherent_trap_projection` from the executable-body side | Already off it. |
 
@@ -283,6 +283,21 @@ expression emits appear in equal numbers goes with it in a represented body:
 the call-target and target-type halves now carry their own typed obligations
 with their own exactly-one rules, so counting them by span proves nothing
 extra.
+
+**The bind-thunk family was blocked on a correspondence, not a node.** Its
+target-type and call-target halves came free with those two families. The
+closure-local half keys on `.local`, which *is* a joinable instruction kind --
+what was missing is that `BindThunkFact` names the closure local by
+`closure_value_id` and `ExecutableLocalIdentity` carried no `ValueId`, so
+there was nothing to join on but the spelling, which would have been weaker
+than the instruction join it replaces.
+
+`ExecutableLocalIdentity.value_id` is that correspondence, interned where the
+local is. A `ValueId` is a *name* and a `LocalId` is a *declaration
+generation*, so a name reused after its scope ends gives several locals one
+`ValueId`; the disambiguator is the same one the instruction join used, the
+initializer's span, and the storage type is checked as before. The typed join
+therefore proves at least as much.
 
 **What moved and what was dropped.** Everything
 `targetTypeFactAgreesWithInstruction` checked -- `target_index`, target owner,
