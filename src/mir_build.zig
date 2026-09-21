@@ -42,6 +42,7 @@ const AggregateInitializerPlan = mir_model.AggregateInitializerPlan;
 const AggregateReturnPointerFact = mir_model.AggregateReturnPointerFact;
 const AggregateReturnSummaryFact = mir_model.AggregateReturnSummaryFact;
 const ArithmeticDomain = mir_verify_util.ArithmeticDomain;
+const ArithmeticDomainFinding = mir_model.ArithmeticDomainFinding;
 const AtomicInitializerPlan = mir_model.AtomicInitializerPlan;
 const BindThunkFact = mir_model.BindThunkFact;
 const Block = mir_model.Block;
@@ -13113,16 +13114,16 @@ pub const FunctionBuilder = struct {
         const left_domain = self.exprArithmeticDomain(node.left.*);
         const right_domain = self.exprArithmeticDomain(node.right.*);
         if (mirIsArithmeticBinary(node.op) and self.arithmeticDomainsImplicitlyMix(node.left.*, left_domain, node.right.*, right_domain)) {
-            try self.addInstr(.arithmetic_domain_check, "arith_policy_mix", .unknown, span);
+            try self.addFinding(.{ .arithmetic_domain = .arith_policy_mix }, span);
         }
         if ((node.op == .div or node.op == .mod) and (left_domain != null or right_domain != null)) {
-            try self.addInstr(.arithmetic_domain_check, "arith_domain_division", .unknown, span);
+            try self.addFinding(.{ .arithmetic_domain = .arith_domain_division }, span);
         }
         if (mirIsOrderedComparison(node.op) and (isMirForbiddenOrderingDomain(left_domain) or isMirForbiddenOrderingDomain(right_domain))) {
-            try self.addInstr(.arithmetic_domain_check, "ordered_arith_domain_operand", .unknown, span);
+            try self.addFinding(.{ .arithmetic_domain = .ordered_arith_domain_operand }, span);
         }
         if (mirIsBitwiseBinary(node.op) and (self.exprHasForbiddenBitwiseDomain(node.left.*) or self.exprHasForbiddenBitwiseDomain(node.right.*))) {
-            try self.addInstr(.arithmetic_domain_check, "bitwise_arith_domain_operand", .unknown, span);
+            try self.addFinding(.{ .arithmetic_domain = .bitwise_arith_domain_operand }, span);
         }
     }
 
@@ -13804,7 +13805,7 @@ pub const FunctionBuilder = struct {
                     try self.addInstr(.address_operation, @tagName(node.op), self.exprType(node.expr.*), expr.span);
                 }
                 if (node.op == .bit_not and self.exprHasForbiddenBitwiseDomain(node.expr.*)) {
-                    try self.addInstr(.arithmetic_domain_check, "bitwise_arith_domain_operand", .unknown, expr.span);
+                    try self.addFinding(.{ .arithmetic_domain = .bitwise_arith_domain_operand }, expr.span);
                 }
                 const unary_result_ty = if (self.assignment_target_ty == .integer)
                     self.assignment_target_ty
@@ -14319,7 +14320,7 @@ pub const FunctionBuilder = struct {
                 // avoids both the false negative (sema misses `trap_from`) and the
                 // false positive (blanket `CallMayTrap` on pure casts like `from`).
                 if (self.domainConversionCallFinding(node.callee.*)) |finding| {
-                    try self.addInstr(.arithmetic_domain_check, finding, .unknown, expr.span);
+                    try self.addFinding(.{ .arithmetic_domain = finding }, expr.span);
                 }
                 if (self.typedResourceCallFinding(node.callee.*)) |finding| {
                     try self.addInstr(.usage_check, finding, .unknown, expr.span);
@@ -19180,7 +19181,7 @@ pub const FunctionBuilder = struct {
     // D.1 operation legality for static scalar/domain calls (`S.before(...)`,
     // `u32.from(...)`, ...): rejects an operation name that is not defined for the
     // base type's domain. Value-method calls and non-type bases are left alone.
-    fn domainConversionCallFinding(self: *FunctionBuilder, callee: ast.Expr) ?[]const u8 {
+    fn domainConversionCallFinding(self: *FunctionBuilder, callee: ast.Expr) ?ArithmeticDomainFinding {
         const member = memberExpr(callee) orelse return null;
         const ident_name = calleeIdentName(member.base.*) orelse return null;
         if (self.local_types.contains(ident_name) or self.globals.contains(ident_name)) return null;
@@ -19189,12 +19190,12 @@ pub const FunctionBuilder = struct {
         const name_ty = ast.TypeExpr{ .span = ident.span, .kind = .{ .name = ident } };
         if (arithmeticDomainTypeAlias(name_ty, self.aliases)) |domain| {
             return switch (domain) {
-                .serial => if (!isMirSerialOpName(op) and !isMirConversionName(op)) "serial_operation" else null,
-                .counter => if (!isMirCounterOpName(op) and !isMirConversionName(op)) "counter_operation" else null,
-                .wrap, .sat => if (!isMirConversionName(op)) "conversion_operation" else null,
+                .serial => if (!isMirSerialOpName(op) and !isMirConversionName(op)) .serial_operation else null,
+                .counter => if (!isMirCounterOpName(op) and !isMirConversionName(op)) .counter_operation else null,
+                .wrap, .sat => if (!isMirConversionName(op)) .conversion_operation else null,
             };
         }
-        if (self.resolvesToScalarInt(ident_name, 0) and !isMirConversionName(op)) return "conversion_operation";
+        if (self.resolvesToScalarInt(ident_name, 0) and !isMirConversionName(op)) return .conversion_operation;
         return null;
     }
 

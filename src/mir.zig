@@ -441,7 +441,6 @@ const aggregateDiagnostic = mir_verify_util.aggregateDiagnostic;
 const resultFindingDiagnostic = mir_verify_util.resultFindingDiagnostic;
 const switchFindingDiagnostic = mir_verify_util.switchFindingDiagnostic;
 const assignmentFindingDiagnostic = mir_verify_util.assignmentFindingDiagnostic;
-const arithmeticDomainFindingDiagnostic = mir_verify_util.arithmeticDomainFindingDiagnostic;
 const addressDerefDiagnostic = mir_verify_util.addressDerefDiagnostic;
 const addressClassMismatchDiagnostic = mir_verify_util.addressClassMismatchDiagnostic;
 const ffiFindingDiagnostic = mir_verify_util.ffiFindingDiagnostic;

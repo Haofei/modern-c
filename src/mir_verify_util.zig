@@ -138,15 +138,19 @@ pub fn assignmentFindingDiagnostic(finding: []const u8) []const u8 {
     return "E_INVALID_ASSIGNMENT_TARGET";
 }
 
-pub fn arithmeticDomainFindingDiagnostic(finding: []const u8) []const u8 {
-    if (std.mem.eql(u8, finding, "arith_policy_mix")) return "E_ARITH_POLICY_MIX";
-    if (std.mem.eql(u8, finding, "arith_domain_division")) return "E_ARITH_DOMAIN_DIVISION";
-    if (std.mem.eql(u8, finding, "bitwise_arith_domain_operand")) return "E_BITWISE_ARITH_DOMAIN_OPERAND";
-    if (std.mem.eql(u8, finding, "ordered_arith_domain_operand")) return "E_ORDERED_ARITH_DOMAIN_OPERAND";
-    if (std.mem.eql(u8, finding, "serial_operation")) return "E_SERIAL_OPERATION";
-    if (std.mem.eql(u8, finding, "counter_operation")) return "E_COUNTER_OPERATION";
-    if (std.mem.eql(u8, finding, "conversion_operation")) return "E_CONVERSION_OPERATION";
-    return "E_ARITH_POLICY_MIX";
+/// The diagnostic an arithmetic-domain finding is reported as. The `eql`
+/// chain this replaced ended by returning `E_ARITH_POLICY_MIX` for anything
+/// unrecognised, which was the same answer as a real `arith_policy_mix`.
+pub fn arithmeticDomainDiagnostic(finding: mir_model.ArithmeticDomainFinding) []const u8 {
+    return switch (finding) {
+        .arith_policy_mix => "E_ARITH_POLICY_MIX",
+        .arith_domain_division => "E_ARITH_DOMAIN_DIVISION",
+        .bitwise_arith_domain_operand => "E_BITWISE_ARITH_DOMAIN_OPERAND",
+        .ordered_arith_domain_operand => "E_ORDERED_ARITH_DOMAIN_OPERAND",
+        .serial_operation => "E_SERIAL_OPERATION",
+        .counter_operation => "E_COUNTER_OPERATION",
+        .conversion_operation => "E_CONVERSION_OPERATION",
+    };
 }
 
 /// The diagnostic an operator-operand finding is reported as.

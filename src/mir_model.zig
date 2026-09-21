@@ -4966,6 +4966,19 @@ pub const OperatorFinding = enum {
     operator_operand,
 };
 
+/// One arithmetic-domain refusal: an operation a `wrap`/`sat`/`serial`/
+/// `counter` domain does not define, or a mix of two domains in one
+/// expression. `mir_verify_util.arithmeticDomainDiagnostic` is the mapping.
+pub const ArithmeticDomainFinding = enum {
+    arith_policy_mix,
+    arith_domain_division,
+    bitwise_arith_domain_operand,
+    ordered_arith_domain_operand,
+    serial_operation,
+    counter_operation,
+    conversion_operation,
+};
+
 /// What a refusal *is*, as a value rather than as a string.
 ///
 /// One arm per finding family. A family whose diagnostic needs more than the
@@ -4973,6 +4986,7 @@ pub const OperatorFinding = enum {
 /// class to compare -- so the verifier never re-derives it from a spelling.
 pub const FindingKind = union(enum) {
     operator: OperatorFinding,
+    arithmetic_domain: ArithmeticDomainFinding,
 };
 
 /// A refusal the MIR builder recorded while lowering a body.
