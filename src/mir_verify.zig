@@ -231,14 +231,6 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                         .{code},
                     );
                 }
-                if (instruction.kind == .aggregate_check) {
-                    const code = aggregateDiagnostic(instruction.detail);
-                    reporter.err(
-                        sourcePointSpan(source),
-                        "{s}: MIR verifier found invalid aggregate literal shape",
-                        .{code},
-                    );
-                }
                 if (irqContextCallFinding(mir, function, instruction)) |finding| {
                     const code = irqContextDiagnostic(finding);
                     reporter.err(
@@ -275,6 +267,11 @@ fn reportFindings(function: Function, reporter: *diagnostics.Reporter) void {
                 sourcePointSpan(source),
                 "{s}: MIR verifier found invalid arithmetic-domain operation",
                 .{arithmeticDomainDiagnostic(domain)},
+            ),
+            .aggregate => |aggregate| reporter.err(
+                sourcePointSpan(source),
+                "{s}: MIR verifier found invalid aggregate literal shape",
+                .{aggregateDiagnostic(aggregate.finding)},
             ),
             .result => |result| if (resultDiagnostic(result)) |code| reporter.err(
                 sourcePointSpan(source),

@@ -5018,6 +5018,22 @@ pub const ResultFinding = enum {
     switch_multi_binding_arm,
 };
 
+/// One aggregate-literal shape refusal.
+pub const AggregateFinding = enum {
+    array_literal_length,
+    struct_literal_duplicate_field,
+    struct_literal_unknown_field,
+    struct_literal_missing_field,
+};
+
+/// An aggregate-literal refusal and the aggregate type it is about. The type
+/// is not decoration: the verification-fact dump names it, and it is the only
+/// thing in the row the finding itself does not say.
+pub const AggregateFindingPayload = struct {
+    finding: AggregateFinding,
+    ty: ValueType,
+};
+
 /// What a refusal *is*, as a value rather than as a string.
 ///
 /// One arm per finding family. A family whose diagnostic needs more than the
@@ -5029,6 +5045,7 @@ pub const FindingKind = union(enum) {
     assignment: AssignmentFinding,
     switch_coverage: SwitchFinding,
     result: ResultFinding,
+    aggregate: AggregateFindingPayload,
 };
 
 /// A refusal the MIR builder recorded while lowering a body.

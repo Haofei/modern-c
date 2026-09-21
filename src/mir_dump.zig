@@ -736,6 +736,11 @@ fn appendFindingRows(allocator: std.mem.Allocator, function: Function, out: *std
                 "mir verify fn={s} pass=core finding={s} line={} column={}\n",
                 .{ function.name, @tagName(domain), source.line, source.column },
             ),
+            .aggregate => |aggregate| try out.print(
+                allocator,
+                "mir verify fn={s} pass=aggregate finding={s} type={s} line={} column={}\n",
+                .{ function.name, @tagName(aggregate.finding), aggregate.ty.name(), source.line, source.column },
+            ),
             .result => |result| try out.print(
                 allocator,
                 "mir verify fn={s} pass=result finding={s} line={} column={}\n",
@@ -849,13 +854,6 @@ pub fn appendVerificationFactsFromMir(allocator: std.mem.Allocator, mir: Module,
                     try out.print(
                         allocator,
                         "mir verify fn={s} pass=conversion finding={s} source_type={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, instruction.result_ty.name(), source.line, source.column },
-                    );
-                }
-                if (instruction.kind == .aggregate_check) {
-                    try out.print(
-                        allocator,
-                        "mir verify fn={s} pass=aggregate finding={s} type={s} line={} column={}\n",
                         .{ function.name, instruction.detail, instruction.result_ty.name(), source.line, source.column },
                     );
                 }

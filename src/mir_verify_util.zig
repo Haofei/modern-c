@@ -98,12 +98,16 @@ pub fn conversionDiagnostic(finding: []const u8) []const u8 {
     return "E_NO_IMPLICIT_CONVERSION";
 }
 
-pub fn aggregateDiagnostic(finding: []const u8) []const u8 {
-    if (std.mem.eql(u8, finding, "array_literal_length")) return "E_ARRAY_LITERAL_LENGTH";
-    if (std.mem.eql(u8, finding, "struct_literal_duplicate_field")) return "E_DUPLICATE_STRUCT_LITERAL_FIELD";
-    if (std.mem.eql(u8, finding, "struct_literal_unknown_field")) return "E_UNKNOWN_STRUCT_FIELD";
-    if (std.mem.eql(u8, finding, "struct_literal_missing_field")) return "E_STRUCT_LITERAL_MISSING_FIELD";
-    return "E_NO_IMPLICIT_CONVERSION";
+/// The diagnostic an aggregate-literal finding is reported as. The `eql`
+/// chain this replaced fell through to `E_NO_IMPLICIT_CONVERSION`, a code
+/// from a different family entirely, for a spelling it did not know.
+pub fn aggregateDiagnostic(finding: mir_model.AggregateFinding) []const u8 {
+    return switch (finding) {
+        .array_literal_length => "E_ARRAY_LITERAL_LENGTH",
+        .struct_literal_duplicate_field => "E_DUPLICATE_STRUCT_LITERAL_FIELD",
+        .struct_literal_unknown_field => "E_UNKNOWN_STRUCT_FIELD",
+        .struct_literal_missing_field => "E_STRUCT_LITERAL_MISSING_FIELD",
+    };
 }
 
 /// The diagnostic a `Result` control-flow finding is reported as, or null

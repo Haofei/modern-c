@@ -18938,11 +18938,11 @@ pub const FunctionBuilder = struct {
             else => return,
         };
         const expected_len = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse {
-            try self.addInstr(.aggregate_check, "array_literal_length", valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases), span);
+            try self.addFinding(.{ .aggregate = .{ .finding = .array_literal_length, .ty = valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases) } }, span);
             return;
         };
         if (item_count != expected_len) {
-            try self.addInstr(.aggregate_check, "array_literal_length", valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases), span);
+            try self.addFinding(.{ .aggregate = .{ .finding = .array_literal_length, .ty = valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases) } }, span);
         }
     }
 
@@ -18959,20 +18959,20 @@ pub const FunctionBuilder = struct {
 
         for (fields) |field| {
             if (seen.contains(field.name.text)) {
-                try self.addInstr(.aggregate_check, "struct_literal_duplicate_field", .{ .struct_ = struct_name }, field.name.span);
+                try self.addFinding(.{ .aggregate = .{ .finding = .struct_literal_duplicate_field, .ty = .{ .struct_ = struct_name } } }, field.name.span);
             } else {
                 try seen.put(field.name.text, {});
             }
             if (self.structFieldTypeExpr(struct_name, field.name.text) == null) {
                 has_unknown_field = true;
-                try self.addInstr(.aggregate_check, "struct_literal_unknown_field", .{ .struct_ = struct_name }, field.name.span);
+                try self.addFinding(.{ .aggregate = .{ .finding = .struct_literal_unknown_field, .ty = .{ .struct_ = struct_name } } }, field.name.span);
             }
         }
 
         if (has_unknown_field) return;
         for (expected_fields) |field| {
             if (!seen.contains(field.name.text)) {
-                try self.addInstr(.aggregate_check, "struct_literal_missing_field", .{ .struct_ = struct_name }, span);
+                try self.addFinding(.{ .aggregate = .{ .finding = .struct_literal_missing_field, .ty = .{ .struct_ = struct_name } } }, span);
             }
         }
     }
