@@ -73,10 +73,14 @@ pub fn hasAttr(attrs: []const ast.Attr, name: []const u8) bool {
     return false;
 }
 
-pub fn nullabilityDiagnostic(finding: []const u8) []const u8 {
-    if (std.mem.eql(u8, finding, "null_to_nonnull")) return "E_NULL_NON_NULL_POINTER";
-    if (std.mem.eql(u8, finding, "nullable_to_nonnull")) return "E_NO_IMPLICIT_POINTER_CONVERSION";
-    return "E_NO_IMPLICIT_POINTER_CONVERSION";
+/// The diagnostic a nullability-conversion finding is reported as. The chain
+/// this replaced had a fallback identical to its second arm, so a spelling it
+/// did not know was reported as `nullable_to_nonnull`.
+pub fn nullabilityDiagnostic(finding: mir_model.NullabilityFinding) []const u8 {
+    return switch (finding) {
+        .null_to_nonnull => "E_NULL_NON_NULL_POINTER",
+        .nullable_to_nonnull => "E_NO_IMPLICIT_POINTER_CONVERSION",
+    };
 }
 
 /// The diagnostic an implicit-conversion finding is reported as.

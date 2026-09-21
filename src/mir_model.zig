@@ -5068,6 +5068,13 @@ pub const ConversionFindingPayload = struct {
     source_ty: ValueType,
 };
 
+/// One nullability-conversion refusal: a nullable pointer, or the null
+/// literal itself, reaching a non-null pointer target.
+pub const NullabilityFinding = enum {
+    null_to_nonnull,
+    nullable_to_nonnull,
+};
+
 /// What a refusal *is*, as a value rather than as a string.
 ///
 /// One arm per finding family. A family whose diagnostic needs more than the
@@ -5081,6 +5088,7 @@ pub const FindingKind = union(enum) {
     result: ResultFinding,
     aggregate: AggregateFindingPayload,
     conversion: ConversionFindingPayload,
+    nullability: NullabilityFinding,
 };
 
 /// A refusal the MIR builder recorded while lowering a body.

@@ -17031,7 +17031,7 @@ pub const FunctionBuilder = struct {
 
     fn addNullabilityConversionCheck(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr, span: ast.Span) !void {
         const finding = nullabilityFinding(target_ty, self.exprType(expr)) orelse return;
-        try self.addInstr(.nullability_conversion, finding, target_ty, span);
+        try self.addFinding(.{ .nullability = finding }, span);
     }
 
     fn addIntegerLiteralFact(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr, span: ast.Span) !void {

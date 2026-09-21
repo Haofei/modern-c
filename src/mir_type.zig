@@ -52,10 +52,10 @@ pub fn isVoidLike(ty: ValueType) bool {
     return ty == .void;
 }
 
-pub fn nullabilityFinding(target_ty: ValueType, source_ty: ValueType) ?[]const u8 {
+pub fn nullabilityFinding(target_ty: ValueType, source_ty: ValueType) ?mir_model.NullabilityFinding {
     if (target_ty == .pointer and source_ty == .nullable_pointer) {
         return switch (source_ty) {
-            .nullable_pointer => |shape| if (isNullPointerShape(shape)) "null_to_nonnull" else "nullable_to_nonnull",
+            .nullable_pointer => |shape| if (isNullPointerShape(shape)) .null_to_nonnull else .nullable_to_nonnull,
             else => null,
         };
     }

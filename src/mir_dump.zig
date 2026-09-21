@@ -736,6 +736,11 @@ fn appendFindingRows(allocator: std.mem.Allocator, function: Function, out: *std
                 "mir verify fn={s} pass=core finding={s} line={} column={}\n",
                 .{ function.name, @tagName(domain), source.line, source.column },
             ),
+            .nullability => |nullability| try out.print(
+                allocator,
+                "mir verify fn={s} pass=nullability finding={s} line={} column={}\n",
+                .{ function.name, @tagName(nullability), source.line, source.column },
+            ),
             .conversion => |conversion| try out.print(
                 allocator,
                 "mir verify fn={s} pass=conversion finding={s} source_type={s} line={} column={}\n",
@@ -845,13 +850,6 @@ pub fn appendVerificationFactsFromMir(allocator: std.mem.Allocator, mir: Module,
                     try out.print(
                         allocator,
                         "mir verify fn={s} pass=mmio finding=access_forbidden op={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, source.line, source.column },
-                    );
-                }
-                if (instruction.kind == .nullability_conversion) {
-                    try out.print(
-                        allocator,
-                        "mir verify fn={s} pass=nullability finding={s} line={} column={}\n",
                         .{ function.name, instruction.detail, source.line, source.column },
                     );
                 }
