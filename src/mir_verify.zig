@@ -223,14 +223,6 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                         .{code},
                     );
                 }
-                if (instruction.kind == .conversion_check) {
-                    const code = conversionDiagnostic(instruction.detail);
-                    reporter.err(
-                        sourcePointSpan(source),
-                        "{s}: MIR verifier found invalid implicit conversion",
-                        .{code},
-                    );
-                }
                 if (irqContextCallFinding(mir, function, instruction)) |finding| {
                     const code = irqContextDiagnostic(finding);
                     reporter.err(
@@ -267,6 +259,11 @@ fn reportFindings(function: Function, reporter: *diagnostics.Reporter) void {
                 sourcePointSpan(source),
                 "{s}: MIR verifier found invalid arithmetic-domain operation",
                 .{arithmeticDomainDiagnostic(domain)},
+            ),
+            .conversion => |conversion| reporter.err(
+                sourcePointSpan(source),
+                "{s}: MIR verifier found invalid implicit conversion",
+                .{conversionDiagnostic(conversion.finding)},
             ),
             .aggregate => |aggregate| reporter.err(
                 sourcePointSpan(source),

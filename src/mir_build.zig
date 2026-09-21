@@ -61,6 +61,7 @@ const CleanupCfg = mir_model.CleanupCfg;
 const ConstGetFact = mir_model.ConstGetFact;
 const ConstScalarValue = mir_model.ConstScalarValue;
 const ContractRegion = mir_model.ContractRegion;
+const ConversionFinding = mir_model.ConversionFinding;
 const ConversionContext = mir_verify_util.ConversionContext;
 const DefId = mir_model.DefId;
 const DropGlueFact = mir_model.DropGlueFact;
@@ -15415,6 +15416,12 @@ pub const FunctionBuilder = struct {
         try self.addInstrWithValue(kind, detail, ty, span, null);
     }
 
+    /// Record a conversion refusal together with the source type its
+    /// diagnostic row names.
+    fn addConversionFinding(self: *FunctionBuilder, finding: ConversionFinding, source_ty: ValueType, span: ast.Span) !void {
+        try self.addFinding(.{ .conversion = .{ .finding = finding, .source_ty = source_ty } }, span);
+    }
+
     /// Record a refusal. A finding is a value on the function, not an
     /// instruction whose `detail` string names it: nothing downstream has to
     /// classify a spelling to learn which diagnostic it is.
@@ -17100,11 +17107,11 @@ pub const FunctionBuilder = struct {
         const source_ty = self.exprType(expr);
         if (nullabilityFinding(target_ty, source_ty) != null) return;
         if (integerLiteralRangeFinding(target_ty, expr)) |finding| {
-            try self.addInstr(.conversion_check, finding, .{ .integer = "comptime_int" }, span);
+            try self.addConversionFinding(finding, .{ .integer = "comptime_int" }, span);
             return;
         }
         if (self.packedBitsRawInitializerRangeFinding(target_ty, expr)) |finding| {
-            try self.addInstr(.conversion_check, finding, .{ .integer = "comptime_int" }, span);
+            try self.addConversionFinding(finding, .{ .integer = "comptime_int" }, span);
             return;
         }
         if (integerLiteralFitsTarget(target_ty, expr)) {
@@ -17126,20 +17133,20 @@ pub const FunctionBuilder = struct {
             return;
         }
         if (mirTypesAreCompatible(target_ty, source_ty)) return;
-        try self.addInstr(.conversion_check, conversionFinding(ctx, target_ty, source_ty), source_ty, span);
+        try self.addConversionFinding(conversionFinding(ctx, target_ty, source_ty), source_ty, span);
     }
 
     fn addForIterableCheck(self: *FunctionBuilder, expr: ast.Expr, span: ast.Span) !void {
         const source_ty = self.exprType(expr);
         if (isMirForIterable(source_ty)) return;
-        try self.addInstr(.conversion_check, "for_base_not_iterable", source_ty, span);
+        try self.addConversionFinding(.for_base_not_iterable, source_ty, span);
     }
 
     fn addIndexBaseCheck(self: *FunctionBuilder, expr: ast.Expr, span: ast.Span) !void {
         if (self.exprIsStructurallyArrayValued(expr)) return;
         const source_ty = self.exprType(expr);
         if (isMirIndexableBase(source_ty)) return;
-        try self.addInstr(.conversion_check, "index_base_not_array_or_slice", source_ty, span);
+        try self.addConversionFinding(.index_base_not_array_or_slice, source_ty, span);
     }
 
     fn exprIsStructurallyArrayValued(self: *FunctionBuilder, expr: ast.Expr) bool {
@@ -17195,7 +17202,7 @@ pub const FunctionBuilder = struct {
     fn addIndexOperandCheck(self: *FunctionBuilder, expr: ast.Expr, span: ast.Span) !void {
         const source_ty = self.exprType(expr);
         if (isMirIndexType(source_ty)) return;
-        try self.addInstr(.conversion_check, "index_not_usize", source_ty, span);
+        try self.addConversionFinding(.index_not_usize, source_ty, span);
     }
 
     fn addTargetRepresentationCheck(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr, span: ast.Span) !void {
@@ -17247,7 +17254,7 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    fn packedBitsRawInitializerRangeFinding(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr) ?[]const u8 {
+    fn packedBitsRawInitializerRangeFinding(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr) ?ConversionFinding {
         const repr_ty = self.packedBitsReprType(target_ty) orelse return null;
         return integerLiteralRangeFinding(repr_ty, expr);
     }

@@ -79,23 +79,38 @@ pub fn nullabilityDiagnostic(finding: []const u8) []const u8 {
     return "E_NO_IMPLICIT_POINTER_CONVERSION";
 }
 
-pub fn conversionDiagnostic(finding: []const u8) []const u8 {
-    if (std.mem.eql(u8, finding, "integer_literal_out_of_range")) return "E_INTEGER_LITERAL_OUT_OF_RANGE";
-    if (std.mem.eql(u8, finding, "for_base_not_iterable")) return "E_FOR_BASE_NOT_ARRAY_OR_SLICE";
-    if (std.mem.eql(u8, finding, "index_base_not_array_or_slice")) return "E_INDEX_BASE_NOT_ARRAY_OR_SLICE";
-    if (std.mem.eql(u8, finding, "index_not_usize")) return "E_INDEX_NOT_USIZE";
-    if (std.mem.eql(u8, finding, "return_c_void_conversion")) return "E_C_VOID_CONVERSION";
-    if (std.mem.eql(u8, finding, "initializer_c_void_conversion")) return "E_C_VOID_CONVERSION";
-    if (std.mem.eql(u8, finding, "assignment_c_void_conversion")) return "E_C_VOID_CONVERSION";
-    if (std.mem.eql(u8, finding, "call_arg_c_void_conversion")) return "E_C_VOID_CONVERSION";
-    if (std.mem.eql(u8, finding, "condition_type_mismatch")) return "E_CONDITION_NOT_BOOL";
-    if (std.mem.eql(u8, finding, "return_pointer_conversion")) return "E_NO_IMPLICIT_POINTER_CONVERSION";
-    if (std.mem.eql(u8, finding, "initializer_pointer_conversion")) return "E_NO_IMPLICIT_POINTER_CONVERSION";
-    if (std.mem.eql(u8, finding, "assignment_pointer_conversion")) return "E_NO_IMPLICIT_POINTER_CONVERSION";
-    if (std.mem.eql(u8, finding, "call_arg_pointer_conversion")) return "E_NO_IMPLICIT_POINTER_CONVERSION";
-    if (std.mem.eql(u8, finding, "return_type_mismatch")) return "E_RETURN_TYPE_MISMATCH";
-    if (std.mem.eql(u8, finding, "array_to_pointer_decay")) return "E_ARRAY_TO_POINTER_DECAY";
-    return "E_NO_IMPLICIT_CONVERSION";
+/// The diagnostic an implicit-conversion finding is reported as.
+///
+/// Several findings share one code on purpose: the four `*_c_void_conversion`
+/// members are all `E_C_VOID_CONVERSION` and the four `*_pointer_conversion`
+/// members are all `E_NO_IMPLICIT_POINTER_CONVERSION`. The context survives on
+/// the finding because the verification-fact dump names it; only the
+/// diagnostic collapses it. The `eql` chain this replaced could not tell that
+/// deliberate sharing apart from its own `E_NO_IMPLICIT_CONVERSION` fallback.
+pub fn conversionDiagnostic(finding: mir_model.ConversionFinding) []const u8 {
+    return switch (finding) {
+        .integer_literal_out_of_range => "E_INTEGER_LITERAL_OUT_OF_RANGE",
+        .for_base_not_iterable => "E_FOR_BASE_NOT_ARRAY_OR_SLICE",
+        .index_base_not_array_or_slice => "E_INDEX_BASE_NOT_ARRAY_OR_SLICE",
+        .index_not_usize => "E_INDEX_NOT_USIZE",
+        .condition_type_mismatch => "E_CONDITION_NOT_BOOL",
+        .array_to_pointer_decay => "E_ARRAY_TO_POINTER_DECAY",
+        .return_c_void_conversion,
+        .initializer_c_void_conversion,
+        .assignment_c_void_conversion,
+        .call_arg_c_void_conversion,
+        => "E_C_VOID_CONVERSION",
+        .return_pointer_conversion,
+        .initializer_pointer_conversion,
+        .assignment_pointer_conversion,
+        .call_arg_pointer_conversion,
+        => "E_NO_IMPLICIT_POINTER_CONVERSION",
+        .return_type_mismatch => "E_RETURN_TYPE_MISMATCH",
+        .initializer_type_mismatch,
+        .assignment_type_mismatch,
+        .call_arg_type_mismatch,
+        => "E_NO_IMPLICIT_CONVERSION",
+    };
 }
 
 /// The diagnostic an aggregate-literal finding is reported as. The `eql`

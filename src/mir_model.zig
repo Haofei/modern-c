@@ -5034,6 +5034,40 @@ pub const AggregateFindingPayload = struct {
     ty: ValueType,
 };
 
+/// One implicit-conversion refusal.
+///
+/// The twelve context-shaped members are the product of five conversion
+/// contexts and the three shapes `mir_type.conversionFinding` distinguishes
+/// (a `c_void` pointer, a pointer view, anything else); the rest are the
+/// conversions that do not depend on a context.
+pub const ConversionFinding = enum {
+    integer_literal_out_of_range,
+    for_base_not_iterable,
+    index_base_not_array_or_slice,
+    index_not_usize,
+    condition_type_mismatch,
+    array_to_pointer_decay,
+    return_c_void_conversion,
+    return_pointer_conversion,
+    return_type_mismatch,
+    initializer_c_void_conversion,
+    initializer_pointer_conversion,
+    initializer_type_mismatch,
+    assignment_c_void_conversion,
+    assignment_pointer_conversion,
+    assignment_type_mismatch,
+    call_arg_c_void_conversion,
+    call_arg_pointer_conversion,
+    call_arg_type_mismatch,
+};
+
+/// A conversion refusal and the source type it was refused from, which the
+/// verification-fact dump prints as `source_type=`.
+pub const ConversionFindingPayload = struct {
+    finding: ConversionFinding,
+    source_ty: ValueType,
+};
+
 /// What a refusal *is*, as a value rather than as a string.
 ///
 /// One arm per finding family. A family whose diagnostic needs more than the
@@ -5046,6 +5080,7 @@ pub const FindingKind = union(enum) {
     switch_coverage: SwitchFinding,
     result: ResultFinding,
     aggregate: AggregateFindingPayload,
+    conversion: ConversionFindingPayload,
 };
 
 /// A refusal the MIR builder recorded while lowering a body.

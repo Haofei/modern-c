@@ -62,28 +62,28 @@ pub fn nullabilityFinding(target_ty: ValueType, source_ty: ValueType) ?[]const u
     return null;
 }
 
-pub fn conversionFinding(ctx: mir_verify_util.ConversionContext, target: ValueType, source: ValueType) []const u8 {
+pub fn conversionFinding(ctx: mir_verify_util.ConversionContext, target: ValueType, source: ValueType) mir_model.ConversionFinding {
     // Arrays never implicitly decay to pointers (section 9), in any context.
-    if (source == .array and isPointerLikeType(target)) return "array_to_pointer_decay";
+    if (source == .array and isPointerLikeType(target)) return .array_to_pointer_decay;
     const c_void_conversion = isCVoidPointerConversion(target, source);
     const pointer_conversion = isPointerViewConversion(target, source);
     return switch (ctx) {
-        .return_ => if (c_void_conversion) "return_c_void_conversion" else if (pointer_conversion) "return_pointer_conversion" else "return_type_mismatch",
-        .initializer => if (c_void_conversion) "initializer_c_void_conversion" else if (pointer_conversion) "initializer_pointer_conversion" else "initializer_type_mismatch",
-        .assignment => if (c_void_conversion) "assignment_c_void_conversion" else if (pointer_conversion) "assignment_pointer_conversion" else "assignment_type_mismatch",
-        .call_arg => if (c_void_conversion) "call_arg_c_void_conversion" else if (pointer_conversion) "call_arg_pointer_conversion" else "call_arg_type_mismatch",
-        .condition => "condition_type_mismatch",
+        .return_ => if (c_void_conversion) .return_c_void_conversion else if (pointer_conversion) .return_pointer_conversion else .return_type_mismatch,
+        .initializer => if (c_void_conversion) .initializer_c_void_conversion else if (pointer_conversion) .initializer_pointer_conversion else .initializer_type_mismatch,
+        .assignment => if (c_void_conversion) .assignment_c_void_conversion else if (pointer_conversion) .assignment_pointer_conversion else .assignment_type_mismatch,
+        .call_arg => if (c_void_conversion) .call_arg_c_void_conversion else if (pointer_conversion) .call_arg_pointer_conversion else .call_arg_type_mismatch,
+        .condition => .condition_type_mismatch,
     };
 }
 
-pub fn integerLiteralRangeFinding(target_ty: ValueType, expr: ast.Expr) ?[]const u8 {
+pub fn integerLiteralRangeFinding(target_ty: ValueType, expr: ast.Expr) ?mir_model.ConversionFinding {
     const value = integerLiteralValue(expr) orelse return null;
     const bounds = mirCheckedIntBounds(target_ty) orelse return null;
     if (value.negative) {
-        if (!bounds.signed or value.magnitude > bounds.min_abs) return "integer_literal_out_of_range";
+        if (!bounds.signed or value.magnitude > bounds.min_abs) return .integer_literal_out_of_range;
         return null;
     }
-    if (value.magnitude > bounds.max) return "integer_literal_out_of_range";
+    if (value.magnitude > bounds.max) return .integer_literal_out_of_range;
     return null;
 }
 
