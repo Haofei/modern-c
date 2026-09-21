@@ -145,18 +145,26 @@ pointers.
 
 ### Note: the sweep gaps that are left
 
-Five `E_BACKEND_UNSUPPORTED` entries remain in
-`backend-expected-failures.json`, in four families. Largest first:
+Four `E_BACKEND_UNSUPPORTED` entries remain in
+`backend-expected-failures.json`, in three families. Largest first:
 
 | Family | Fixtures | What it is |
 |---|---|---|
 | pointers through arrays, slices and aliases | `data_race_semantics.mc` | **Blocked, and it is not one gap.** Deleting each failing function and re-emitting enumerates 60 of them in five families. The large one is `index` / `range_slice` over an array or slice whose elements are pointers: `executableIndexComplete` and `executableRangeSliceComplete` match the element type by `ValueType.name()`, and `pointerShapeName` renders every single pointer as `*mut`, dropping the pointee -- so the element check cannot distinguish `[]*u32` from `[]*Foo`. That is the stringly-typed `ValueType` P0 above, not a local fix; it needs the element type compared by `TypeId`. The other four: a `*T as [*]T` cast kind that neither `ExecutableCastKind.classify` nor either renderer has; an indirect call through a pointer alias copied from a parameter, declined by codegen admission as `expression `local``; a trapping store of a pointer into an aggregate field; and one `incoherent_statement` in an array-element assignment. Closed on the way past: `(&E).*`, which was refused because the builder computes no type for an `address_of` and so had none for the deref either. |
-| `unsupported_call` | `comptime_params.mc` | |
 | `unsupported_try` | `hosted_io.mc` | |
 | `incoherent_place` | `local_address_escape.mc` | |
 | `incoherent_executable_shape` | `type_arg_and_trivial_drop_reject.mc` | |
 
 The five `E_EXPERIMENTAL_DYN_CODEGEN` entries are policy and stay.
+
+Closed: **`unsupported_call`** (`comptime_params.mc`). It was not a call
+problem either. `sizeof([{ return N; }]u8)` folds to nothing because
+`mir_reflect.staticArrayLen` was a second, weaker copy of
+`array_len.parseArrayLen`: literals, grouping and binary arithmetic, and no
+block-expression length -- the form every other array-length consumer in the
+tree folds. Reflection is not a place to decide what an array length is, so it
+reads the one rule now. The evaluator arguments stay null, so an identifier or
+call length still does not fold there; nothing the copy could answer was lost.
 
 Closed, inside a family that stays open: `(&E).*`. The address is taken and
 immediately given back, so the pair names `E`'s own storage. Nothing folded it:

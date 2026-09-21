@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("ast.zig");
+const array_len = @import("array_len.zig");
 const numeric = @import("numeric.zig");
 const type_layout = @import("layout.zig");
 const mir_summary = @import("mir_summary.zig");
@@ -325,24 +326,17 @@ fn alignForward(value: i128, alignment: i128) ?i128 {
     return std.math.add(i128, value, alignment - rem) catch null;
 }
 
+/// An array length, for the layout questions reflection answers.
+///
+/// This used to be a second, weaker copy of `array_len.parseArrayLen`: literal,
+/// grouping and binary arithmetic, and nothing else. It therefore disagreed
+/// with the rest of the compiler about `[{ ... }]T`, the block-expression
+/// length form, which every other array-length consumer folds. Reflection is
+/// not a place to decide what an array length is; it reads the one rule.
+///
+/// The evaluator arguments stay null: this query runs with no const-function
+/// or const-global environment, exactly as the copy it replaces did, so an
+/// identifier or call length still does not fold here.
 fn staticArrayLen(expr: ast.Expr) ?usize {
-    return switch (expr.kind) {
-        .int_literal => |literal| parseUsizeLiteral(literal),
-        .grouped => |inner| staticArrayLen(inner.*),
-        .binary => |node| {
-            const left = staticArrayLen(node.left.*) orelse return null;
-            const right = staticArrayLen(node.right.*) orelse return null;
-            return switch (node.op) {
-                .add => std.math.add(usize, left, right) catch null,
-                .sub => std.math.sub(usize, left, right) catch null,
-                .mul => std.math.mul(usize, left, right) catch null,
-                .div => if (right == 0) null else @divTrunc(left, right),
-                .mod => if (right == 0) null else @mod(left, right),
-                .shl => if (right >= @bitSizeOf(usize)) null else std.math.shl(usize, left, right),
-                .shr => if (right >= @bitSizeOf(usize)) null else left >> @intCast(right),
-                else => null,
-            };
-        },
-        else => null,
-    };
+    return array_len.parseArrayLen(expr, null, null);
 }

@@ -5,12 +5,6 @@
   "emit_c": [],
   "sweep": [
     {
-      "fixture": "comptime_params.mc",
-      "stage": "EMIT",
-      "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `unsupported_call` in `block_len_size__4` (declined by mir-build)."
-    },
-    {
       "fixture": "data_race_semantics.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
