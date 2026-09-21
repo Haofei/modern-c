@@ -1042,21 +1042,61 @@ fn countConstGetFactsSharingIdentity(function: Function, target: ConstGetFact) u
     return count;
 }
 
-/// One `call_target` instruction, one fact, joined on the instruction
-/// identity. Kind, result type and callee-span agreement are kept alongside
-/// the identity so a retargeted fact still fails.
+/// A call-target fact names the typed call-target obligation its target
+/// realizes: `ExecutableExpression.call_target_obligation` for a call that
+/// produces a value, `ExecutableTerminator.call_target_obligation` for a
+/// diverging explicit trap, which is neither a statement nor an expression
+/// and so had no node to name before.
+///
+/// One node, one fact, in both directions. The kind travels on the
+/// obligation, so a fact retargeted at another `CallTargetKind` still fails;
+/// that agreement used to be `std.meta.stringToEnum` over
+/// `Instruction.detail`, which is the string classification the typed body
+/// exists to replace.
+///
+/// The walk over `call_target` instructions remains only for a body the typed
+/// form does not represent; see `typedObligationsRepresented`.
 pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTargetFacts}!void {
     for (module.functions) |function| {
-        for (function.blocks) |block| for (block.instructions) |instruction| {
-            if (callTargetKindForInstruction(instruction) == null) continue;
-            if (countMatchingCallTargetFacts(function, instruction) != 1) return error.InvalidMirCallTargetFacts;
-        };
+        const body = &function.executable_body;
+        const typed = typedObligationsRepresented(module, function);
+        if (!typed) {
+            for (function.blocks) |block| for (block.instructions) |instruction| {
+                if (callTargetKindForInstruction(instruction) == null) continue;
+                if (countMatchingCallTargetFacts(function, instruction) != 1) return error.InvalidMirCallTargetFacts;
+            };
+        }
         for (function.call_target_facts) |fact| {
             if (!callTargetFactTypedIdentityValid(function, fact)) return error.InvalidMirCallTargetFacts;
-            if (countMatchingCallTargetInstructions(function, fact) != 1) return error.InvalidMirCallTargetFacts;
             if (countMatchingCallTargetFactsForFact(function, fact) != 1) return error.InvalidMirCallTargetFacts;
+            if (typed) {
+                if (mir_model.executableCallTargetObligationCount(body, fact.typed_inst_id) != 1)
+                    return error.InvalidMirCallTargetFacts;
+                const obligation = mir_model.executableCallTargetObligation(body, fact.typed_inst_id) orelse
+                    return error.InvalidMirCallTargetFacts;
+                if (obligation.kind != fact.kind) return error.InvalidMirCallTargetFacts;
+            } else if (countMatchingCallTargetInstructions(function, fact) != 1) {
+                return error.InvalidMirCallTargetFacts;
+            }
+        }
+        if (!typed) continue;
+        for (body.expressions) |expression| {
+            const obligation = expression.call_target_obligation orelse continue;
+            if (countCallTargetFactsForObligation(function, obligation.id) != 1) return error.InvalidMirCallTargetFacts;
+        }
+        for (body.terminators) |terminator| {
+            const obligation = terminator.call_target_obligation orelse continue;
+            if (countCallTargetFactsForObligation(function, obligation.id) != 1) return error.InvalidMirCallTargetFacts;
         }
     }
+}
+
+fn countCallTargetFactsForObligation(function: Function, id: mir_model.InstId) usize {
+    var count: usize = 0;
+    for (function.call_target_facts) |fact| {
+        if (fact.typed_inst_id.eql(id)) count += 1;
+    }
+    return count;
 }
 
 /// Bind facts are the identity bridge between a captured local and a later
@@ -2112,6 +2152,8 @@ fn callTargetKindForInstruction(instruction: Instruction) ?CallTargetKind {
     return std.meta.stringToEnum(CallTargetKind, instruction.detail);
 }
 
+/// Used only for the bodies the typed form does not represent; see
+/// `validateCallTargetFactsForLowering`.
 fn callTargetFactMatchesInstruction(fact: CallTargetFact, instruction: Instruction) bool {
     const kind = callTargetKindForInstruction(instruction) orelse return false;
     if (!fact.typed_inst_id.isValid() or !fact.typed_inst_id.eql(instruction.typed_inst_id)) return false;

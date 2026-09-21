@@ -1341,6 +1341,10 @@ pub const ExecutableExpression = struct {
     /// `integer_literal_conversion` *and* the literal's own `expr`
     /// instruction, and `inst_id` names the second.
     literal_conversion: ExecutableLiteralConversion = .{},
+    /// The call-target obligation this node owns, or null when this node does
+    /// not realize a builtin/intrinsic call target. A `CallTargetFact` names
+    /// it; see `ExecutableCallTargetObligation`.
+    call_target_obligation: ?ExecutableCallTargetObligation = null,
     span_id: SpanId = .invalid,
     result_ty: ValueType,
     type_id: TypeId = .invalid,
@@ -2360,6 +2364,14 @@ pub const ExecutableForStepTerminator = struct {
 pub const ExecutableTerminator = struct {
     block_id: BlockId,
     span_id: SpanId = .invalid,
+    /// The call-target obligation this terminator owns, or null.
+    ///
+    /// An explicit trap call (`trap_assert`, `trap_bounds`, `trap_unreachable`
+    /// and friends) diverges, so the typed body realizes it as the block's
+    /// terminator rather than as an expression: there is no value to name and
+    /// no statement to carry it. That terminator is the node that owns the
+    /// obligation, so it is where the `CallTargetFact` joins.
+    call_target_obligation: ?ExecutableCallTargetObligation = null,
     /// Cleanup stack live on entry to this block, in registration order.
     /// The verifier uses it to check joins and loop back-edges without
     /// reconstructing source scopes.
@@ -2657,6 +2669,64 @@ pub fn executableBoundsObligationCount(body: *const ExecutableBody, id: InstId, 
         }
     }
     return count;
+}
+
+/// A call-target obligation carried by a typed node: this node realizes the
+/// builtin or intrinsic call target `kind`.
+///
+/// The kind travels with the identity for the same reason the literal
+/// conversion's target type does: it is the content of the fact, and without
+/// it a fact retargeted at another `CallTargetKind` would still agree with
+/// the node. It used to be recovered by `std.meta.stringToEnum` over
+/// `Instruction.detail`, which is the string classification the typed body
+/// exists to replace; on the node it is already the enum.
+pub const ExecutableCallTargetObligation = struct {
+    /// Join key. A `CallTargetFact` names this and nothing else; see
+    /// `BoundsFact.typed_inst_id` for why a span is not an identity.
+    id: InstId,
+    kind: CallTargetKind,
+};
+
+/// How many typed nodes carry `id` as their call-target obligation. The
+/// exactly-one invariant a `CallTargetFact` must satisfy is stated over this
+/// count rather than over the `call_target` instruction it used to be
+/// counted against.
+///
+/// Both node shapes are walked: a call that produces a value is an
+/// expression, and an explicit trap call diverges and is the block's
+/// terminator.
+pub fn executableCallTargetObligationCount(body: *const ExecutableBody, id: InstId) usize {
+    if (!id.isValid()) return 0;
+    var count: usize = 0;
+    for (body.expressions) |expression| {
+        const obligation = expression.call_target_obligation orelse continue;
+        if (obligation.id.eql(id)) count += 1;
+    }
+    for (body.terminators) |terminator| {
+        const obligation = terminator.call_target_obligation orelse continue;
+        if (obligation.id.eql(id)) count += 1;
+    }
+    return count;
+}
+
+/// The single typed call-target obligation named by `id`, or null when no
+/// node or more than one carries it.
+pub fn executableCallTargetObligation(body: *const ExecutableBody, id: InstId) ?ExecutableCallTargetObligation {
+    if (!id.isValid()) return null;
+    var found: ?ExecutableCallTargetObligation = null;
+    for (body.expressions) |expression| {
+        const obligation = expression.call_target_obligation orelse continue;
+        if (!obligation.id.eql(id)) continue;
+        if (found != null) return null;
+        found = obligation;
+    }
+    for (body.terminators) |terminator| {
+        const obligation = terminator.call_target_obligation orelse continue;
+        if (!obligation.id.eql(id)) continue;
+        if (found != null) return null;
+        found = obligation;
+    }
+    return found;
 }
 
 pub const ExecutableBody = struct {

@@ -5048,6 +5048,10 @@ pub const FunctionBuilder = struct {
     active_executable_cleanups: std.ArrayList(CleanupActionId),
     executable_block_cleanup_entries: std.ArrayList([]const CleanupActionId),
     executable_terminator_cleanups: std.AutoHashMap(usize, []const CleanupActionId),
+    /// Call-target obligations whose typed node is the block's terminator
+    /// rather than an expression: a diverging explicit trap call. Keyed by
+    /// block index, drained when the terminators are built.
+    executable_terminator_call_targets: std.AutoHashMap(usize, mir_model.ExecutableCallTargetObligation),
     executable_for_each_terminators: std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator),
     executable_for_step_terminators: std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator),
     executable_boolean_branches: std.ArrayList(ExecutableBooleanBranch),
@@ -5116,6 +5120,10 @@ pub const FunctionBuilder = struct {
     // The identity of the most recently emitted instruction, so a fact
     // appended right after `addInstr` can name it.
     last_inst_id: InstId = .invalid,
+    // The source point of that instruction, so a fact appended right after
+    // `addInstr` can look the instruction's own node up in the rendezvous map
+    // without every call site threading the span through a second time.
+    last_inst_source: SourcePoint = .{ .line = 0, .column = 0 },
     // Build-time rendezvous between the two bodies. The typed expression for
     // a source expression is built when its enclosing statement is lowered;
     // the `expr` instruction for the same source expression is emitted later,
@@ -5231,6 +5239,7 @@ pub const FunctionBuilder = struct {
             .active_executable_cleanups = .empty,
             .executable_block_cleanup_entries = .empty,
             .executable_terminator_cleanups = std.AutoHashMap(usize, []const CleanupActionId).init(allocator),
+            .executable_terminator_call_targets = std.AutoHashMap(usize, mir_model.ExecutableCallTargetObligation).init(allocator),
             .executable_for_each_terminators = std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator).init(allocator),
             .executable_for_step_terminators = std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator).init(allocator),
             .executable_boolean_branches = .empty,
@@ -5433,6 +5442,7 @@ pub const FunctionBuilder = struct {
             .active_executable_cleanups = .empty,
             .executable_block_cleanup_entries = .empty,
             .executable_terminator_cleanups = std.AutoHashMap(usize, []const CleanupActionId).init(allocator),
+            .executable_terminator_call_targets = std.AutoHashMap(usize, mir_model.ExecutableCallTargetObligation).init(allocator),
             .executable_for_each_terminators = std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator).init(allocator),
             .executable_for_step_terminators = std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator).init(allocator),
             .executable_boolean_branches = .empty,
@@ -5519,6 +5529,7 @@ pub const FunctionBuilder = struct {
         self.active_executable_cleanups.deinit(self.allocator);
         self.executable_block_cleanup_entries.deinit(self.allocator);
         self.executable_terminator_cleanups.deinit();
+        self.executable_terminator_call_targets.deinit();
         self.executable_for_each_terminators.deinit();
         self.executable_for_step_terminators.deinit();
         self.executable_boolean_branches.deinit(self.allocator);
@@ -5669,6 +5680,8 @@ pub const FunctionBuilder = struct {
         self.executable_block_cleanup_entries = .empty;
         self.executable_terminator_cleanups.deinit();
         self.executable_terminator_cleanups = std.AutoHashMap(usize, []const CleanupActionId).init(self.allocator);
+        self.executable_terminator_call_targets.deinit();
+        self.executable_terminator_call_targets = std.AutoHashMap(usize, mir_model.ExecutableCallTargetObligation).init(self.allocator);
         self.executable_loop_targets.deinit(self.allocator);
         self.executable_loop_targets = .empty;
         self.executable_expr_by_source.deinit();
@@ -5959,6 +5972,7 @@ pub const FunctionBuilder = struct {
                 else
                     &.{},
                 .exit_cleanup_actions = self.executable_terminator_cleanups.get(block_index) orelse &.{},
+                .call_target_obligation = self.executable_terminator_call_targets.get(block_index),
                 .operation = operation,
             });
         }
@@ -9449,8 +9463,16 @@ pub const FunctionBuilder = struct {
                         !sameValueType(result_ty, target.payload_ty) or
                         !try self.internExecutableTypeExpr(target.payload_ty, target.payload_type_expr))
                         break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                    const address = try self.ensureExecutableExprAsType(call.args[0], target.source_ty, target.source_type_expr);
+                    // The typed form folds `mmio.map(..)?` into one operation
+                    // spanning the whole try expression, while the call's own
+                    // instructions -- including its `call_target` -- sit at the
+                    // inner call's span. This is the same fold a negated
+                    // literal gets, and the rendezvous map is where the
+                    // correspondence is written down.
+                    self.executable_folded_operand_source = self.sourcePoint(node.operand.*.span);
                     break :unwrap .{ .mmio_map_checked = .{
-                        .address = try self.ensureExecutableExprAsType(call.args[0], target.source_ty, target.source_type_expr),
+                        .address = address,
                         .unsafe_authorized = true,
                     } };
                 }
@@ -15266,6 +15288,7 @@ pub const FunctionBuilder = struct {
     fn addCallTargetFact(self: *FunctionBuilder, kind: CallTargetKind, result_ty: ValueType, span: ast.Span) !void {
         const source = self.sourcePoint(span);
         const typed_span_id = try self.internSpanId(source);
+        const instruction_source = self.last_inst_source;
         const instructions = &self.blocks.items[self.current].instructions;
         if (instructions.items.len == 0) return error.UnsupportedMirConstruction;
         const instruction = &instructions.items[instructions.items.len - 1];
@@ -15281,6 +15304,57 @@ pub const FunctionBuilder = struct {
         // exact fact anchor (callee token for ordinary builtins, full call for
         // target-typed constructors and explicit traps).
         instruction.typed_callee_span_id = typed_span_id;
+        try self.recordExecutableCallTargetObligation(.{
+            .id = instruction.typed_inst_id,
+            .kind = kind,
+        }, instruction_source);
+    }
+
+    /// Record the call-target obligation identity on the typed node built
+    /// from the same call, so a `CallTargetFact` joins a node in
+    /// `ExecutableBody` rather than a `call_target` instruction the typed
+    /// body does not represent.
+    ///
+    /// The instruction's own span is the anchor, not the fact's (which is the
+    /// callee token for ordinary builtins): the typed node spans the call.
+    /// The first unclaimed expression at that span is this target's, which is
+    /// what keeps two call targets at one span -- `byte_view_as_bytes` emits a
+    /// pair -- claiming their own nodes.
+    ///
+    /// A call that produces no expression is a diverging explicit trap. It is
+    /// realized as the block's terminator, which does not exist yet, so the
+    /// obligation is parked per block and attached when the terminators are
+    /// built.
+    fn recordExecutableCallTargetObligation(
+        self: *FunctionBuilder,
+        obligation: mir_model.ExecutableCallTargetObligation,
+        source: SourcePoint,
+    ) !void {
+        if (!obligation.id.isValid()) return;
+        if (self.executable_expr_by_source.get(source)) |id| {
+            if (id.isValid() and id.index() < self.executable_expressions.items.len) {
+                const node = &self.executable_expressions.items[id.index()];
+                if (node.call_target_obligation == null) {
+                    node.call_target_obligation = obligation;
+                    return;
+                }
+            }
+        }
+        const span_id = try self.internSpanId(source);
+        for (self.executable_expressions.items) |*expression| {
+            if (!expression.span_id.eql(span_id) or expression.call_target_obligation != null) continue;
+            expression.call_target_obligation = obligation;
+            return;
+        }
+        // Only a diverging call has no value node to own the obligation. It
+        // leaves the block through the terminator `finishExecutableTerminalTrap`
+        // installs, which does not exist yet, so the obligation waits here and
+        // is attached when the terminators are built. Anything else that finds
+        // no node is genuinely unrepresented and is left for the verifier to
+        // refuse.
+        if (mir_model.explicitTrapKindForTarget(obligation.kind) == null) return;
+        const parked = try self.executable_terminator_call_targets.getOrPut(self.current);
+        if (!parked.found_existing) parked.value_ptr.* = obligation;
     }
 
     /// Record the bind thunk fact for the `call_target bind` instruction just
@@ -16289,6 +16363,7 @@ pub const FunctionBuilder = struct {
         const typed_inst_id = InstId.fromIndex(self.next_inst_id);
         self.next_inst_id += 1;
         self.last_inst_id = typed_inst_id;
+        self.last_inst_source = source;
         try self.blocks.items[self.current].instructions.append(self.allocator, .{
             .kind = kind,
             .result_ty = ty,

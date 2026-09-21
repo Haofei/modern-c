@@ -103,7 +103,7 @@ that the typed body does not represent as a node at all:
 | float literal | `expr` with `detail == "float"` | **Done.** Shares `ExecutableExpression.literal_conversion` with the integer family. |
 | representation | `representation_check` / `representation_use`, agreeing on `kind` and `detail` | No. |
 | target-type | `target_type`, agreeing on `detail` (the `TargetTypeKind` tag) | Not yet -- a node owns *several*, and 18% of them own no node. Measured; see below. |
-| call-target | `call_target` | Nearly. 370 of 377 already have exactly one typed node at the instruction's span; the residue is explicit traps. Measured; see below. |
+| call-target | `call_target` | **Done.** Joins `ExecutableExpression.call_target_obligation`, or `ExecutableTerminator.call_target_obligation` for a diverging explicit trap; see below. |
 | range | `unchecked_assume` inside a `no_overflow` contract region | No. |
 | access facts | `index` / `expr` | No. |
 | bind-thunk | `call_target` and `target_type`; its closure-local half really is `.local`, a joinable kind | No, for a different reason: `BindThunkFact` names the closure local by `closure_value_id`, and `ExecutableLocalIdentity` carries no `ValueId`. There is no recorded correspondence to join on, and joining by spelling would be weaker than what is there. |
@@ -206,7 +206,7 @@ family owns its obligation (`mir_model.executableLiteralConversionIsFloat`,
 reading the literal payload), so each completeness walk skips the other
 family's obligations and a missing float fact stays a float refusal.
 
-### Note: what the target-type and call-target families measure at
+### Note: what the target-type family measures at
 
 The first three families -- bounds, integer literal, float literal -- landed
 on one shape: a single obligation per typed node, recorded by the builder
@@ -214,7 +214,8 @@ where it already appends the fact. Before assuming the next two fit it, both
 were counted over every fixture in `tests/c_emit`, `tests/spec`, `tests/std`
 and `tests/exec`: 12,316 target-type facts over every function, and 377
 call-target facts over the functions
-`mir_verify.typedObligationsRepresented` admits.
+`mir_verify.typedObligationsRepresented` admits. The call-target half of that
+measurement is now closed; its note follows this one.
 
 **target-type does not fit, for two independent reasons.**
 
@@ -246,16 +247,60 @@ identity, and `targetTypeSyntaxMatches` checks `target_type_id` and
 as stale rather than merely rejected. Each one has to be recorded on the node
 or deliberately dropped, and `StaleMirTargetTypeFacts` is a refusal users see.
 
-**call-target nearly fits.** 370 of 377 facts have exactly one typed
-expression at their instruction's span. The residue is six facts with no
-expression -- `trap_assert` (3), `trap_bounds` (2), `mmio_map` (1) -- and
-seven with two (`byte_view_as_bytes` 5, `dma_as_slice` and `dma_addr` one
-each, which the claim-the-first-unclaimed rule the other families use already
-handles). The explicit traps are the real shape:
-`finishExecutableTerminalTrap` realizes them as a *terminator*, which is
-neither a statement nor an expression, so the obligation needs a home on
-`ExecutableTerminator` before this family can move whole. That is the next
-step here, and it is small.
+### Note: how the call-target family left the instruction stream
+
+**It nearly fitted the first three families' shape, and the residue said what
+was missing.** 370 of 377 facts had exactly one typed expression at their
+instruction's span; seven had two (`byte_view_as_bytes` 5, `dma_as_slice` and
+`dma_addr` one each), which the claim-the-first-unclaimed rule already
+handles. Six had none.
+
+Re-measured over the same four corpora with the obligation actually being
+recorded, the six that find no expression are three distinct shapes, and only
+one of them needed a new home:
+
+| Shape | Count | Where the obligation lives now |
+|---|---|---|
+| a diverging explicit trap (`trap_bounds`, `trap_assert`) | 5 | `ExecutableTerminator.call_target_obligation` |
+| `mmio.map(..)?` | 1 | the `mmio_map_checked` node, through the rendezvous map |
+| a global initializer's pseudo-callable (`reflection_size`, `bitcast`, `atomic_init`, …) | 7 | nowhere: those bodies are outside `typedObligationsRepresented` and stay on the stream |
+
+`ExecutableExpression.call_target_obligation` is the ordinary home:
+`{ id, kind }`, recorded by the builder in `addCallTargetFact` where it
+already appends the fact. The kind travels with the identity for the same
+reason the literal conversion's target type does -- it is the content of the
+fact, and a fact retargeted at another `CallTargetKind` has to disagree with
+the node. It used to be recovered by `std.meta.stringToEnum` over
+`Instruction.detail`; on the node it is already the enum, so the string test
+is gone rather than restated.
+
+The trap arm is the part that needed a new node. `return trap(.Assert)`
+produces a value of type `never`: there is nothing to bind and no expression
+to carry the obligation, because control leaves the block.
+`finishExecutableTerminalTrap` realizes it as the block's *terminator*, which
+is neither a statement nor an expression, so `ExecutableTerminator` gained the
+same field. The terminator does not exist when the fact is appended -- they
+are all built at finish time, one per block -- so the obligation waits in a
+per-block map and is attached there. Only a diverging kind is parked
+(`explicitTrapKindForTarget` is that test); anything else that finds no node
+is genuinely unrepresented and is left for the verifier to refuse, rather than
+being attached to whatever terminator the block happened to get.
+
+The `mmio_map` residue was not a missing node but a missing *correspondence*.
+`mmio.map(..)?` folds the call and its `?` into one `mmio_map_checked` node
+spanning the whole try expression, while the call's own instructions sit at
+the inner call's span -- exactly the fold `-1` gets, where the typed node
+spans the unary and the fact is recorded at the inner literal. So it is
+recorded the same way, through `executable_folded_operand_source` and the
+rendezvous map, and the span scan behind the map is what keeps two call
+targets at one span claiming their own nodes.
+
+The agreements that are dropped are the two that were tautologies of the
+builder's own recording: `sameRepresentationValueType(fact.result_ty,
+instruction.result_ty)` and `fact.typed_span_id ==
+instruction.typed_callee_span_id`, both of which `addCallTargetFact` sets from
+the values it is checking. The kind agreement is the one with content, and it
+moved.
 
 ### Note: the slice-of-pointer read, and the gap behind it
 
