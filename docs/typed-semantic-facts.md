@@ -80,7 +80,7 @@ Not yet typed — the honest list:
   | float literal | `ExecutableExpression.literal_conversion`, shared with the integer family | the typed body |
   | target-type | a row of `ExecutableBody.target_type_obligations`, naming the node that owns it | the typed body |
   | call-target | `ExecutableExpression.call_target_obligation`, or `ExecutableTerminator.call_target_obligation` for a diverging explicit trap (identity plus the `CallTargetKind`) | the typed body |
-  | representation | -- | the instruction stream |
+  | representation | a row of `ExecutableBody.representation_obligations`, naming the node that owns it | the typed body |
   | range | -- | the instruction stream |
   | const_get | -- | the instruction stream |
   | bind thunk | -- | the instruction stream |

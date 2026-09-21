@@ -101,7 +101,7 @@ that the typed body does not represent as a node at all:
 | const_get | `index` with `detail == "const_get"` | No. Also still a `detail` string test. |
 | integer literal | `integer_literal_conversion`, agreeing on `detail` (the literal spelling) | **Done.** Joins `ExecutableExpression.literal_conversion`; the spelling agreement is gone. |
 | float literal | `expr` with `detail == "float"` | **Done.** Shares `ExecutableExpression.literal_conversion` with the integer family. |
-| representation | `representation_check` / `representation_use`, agreeing on `kind` and `detail` | No. |
+| representation | `representation_check` / `representation_use`, agreeing on `kind` and `detail` | **Done.** Joins a row of `ExecutableBody.representation_obligations`; the `detail` agreement is gone. |
 | target-type | `target_type`, agreeing on `detail` (the `TargetTypeKind` tag) | **Done.** Joins a row of `ExecutableBody.target_type_obligations`, which names its owning node; see below. |
 | call-target | `call_target` | **Done.** Joins `ExecutableExpression.call_target_obligation`, or `ExecutableTerminator.call_target_obligation` for a diverging explicit trap; see below. |
 | range | `unchecked_assume` inside a `no_overflow` contract region | No. |
@@ -242,6 +242,24 @@ final count is 1,223 of 12,079 (10%) with no owner, not 2,246 (18%):
 | `direct_call_result` | 800 | The fact is recorded at the *callee* span, where the typed body holds a `SymbolId`. The node that owns the obligation is the *call* expression, so the builder anchors it there through a one-shot override. |
 | `switch_subject`, `inferred_local`, `if_let_subject`, `for_iterable`, `for_element` | 559 | The node exists but is built *after* the `target_type` instruction whose fact names it. Owners are therefore resolved once, at the end of `finishExecutableBody`, against the finished rendezvous map -- not at record time. |
 | `expression_result` and a small tail | 1,223 | Genuinely none: the typed form folds the expression into its parent (a `grouped`, a collapsed cast, a subexpression restructured into a statement). The body owns those obligations and no node does. |
+
+**The representation family takes the same container.** A
+`RepresentationFact` covers three instruction kinds -- `representation_check`,
+`representation_use`, and a `typed_load` whose result carries a niche -- and
+tried the per-node field first. Measured, 634 of 1,399 obligations found no
+unclaimed node, because a *use* is a position rather than a value: the typed
+body models "this value is used as a call argument" structurally, in the
+call's operand list, not as a node of its own. So it is
+`ExecutableBody.representation_obligations`, built and owner-resolved exactly
+as the target-type list is. 1,147 of 1,399 (82%) end up with an owner; the
+rest are the positions with no node.
+
+The `detail` agreement is dropped rather than restated, in both of the places
+it was made: `RepresentationFact.detail` against `Instruction.detail`, and
+`@tagName(fact.use)` against `fact.detail`. The second says out loud what both
+were -- the enum was already the authority and the string its rendering. What
+the fact and the obligation agree about is the instruction kind, the use
+context, the result `TypeId` and the value identity, all typed.
 
 **What moved and what was dropped.** Everything
 `targetTypeFactAgreesWithInstruction` checked -- `target_index`, target owner,

@@ -5060,6 +5060,10 @@ pub const FunctionBuilder = struct {
     /// node is not always built before the instruction whose fact names it --
     /// a `switch` subject and a `for` element are built after.
     executable_target_type_owner_sources: std.ArrayList(SourcePoint),
+    /// Representation obligations recorded for this body, with the anchor
+    /// each is owned at parallel to them, resolved when the body is finished.
+    executable_representation_obligations: std.ArrayList(mir_model.ExecutableRepresentationObligation),
+    executable_representation_owner_sources: std.ArrayList(SourcePoint),
     executable_for_each_terminators: std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator),
     executable_for_step_terminators: std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator),
     executable_boolean_branches: std.ArrayList(ExecutableBooleanBranch),
@@ -5254,6 +5258,8 @@ pub const FunctionBuilder = struct {
             .executable_terminator_call_targets = std.AutoHashMap(usize, mir_model.ExecutableCallTargetObligation).init(allocator),
             .executable_target_type_obligations = .empty,
             .executable_target_type_owner_sources = .empty,
+            .executable_representation_obligations = .empty,
+            .executable_representation_owner_sources = .empty,
             .executable_for_each_terminators = std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator).init(allocator),
             .executable_for_step_terminators = std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator).init(allocator),
             .executable_boolean_branches = .empty,
@@ -5459,6 +5465,8 @@ pub const FunctionBuilder = struct {
             .executable_terminator_call_targets = std.AutoHashMap(usize, mir_model.ExecutableCallTargetObligation).init(allocator),
             .executable_target_type_obligations = .empty,
             .executable_target_type_owner_sources = .empty,
+            .executable_representation_obligations = .empty,
+            .executable_representation_owner_sources = .empty,
             .executable_for_each_terminators = std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator).init(allocator),
             .executable_for_step_terminators = std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator).init(allocator),
             .executable_boolean_branches = .empty,
@@ -5548,6 +5556,8 @@ pub const FunctionBuilder = struct {
         self.executable_terminator_call_targets.deinit();
         self.executable_target_type_obligations.deinit(self.allocator);
         self.executable_target_type_owner_sources.deinit(self.allocator);
+        self.executable_representation_obligations.deinit(self.allocator);
+        self.executable_representation_owner_sources.deinit(self.allocator);
         self.executable_for_each_terminators.deinit();
         self.executable_for_step_terminators.deinit();
         self.executable_boolean_branches.deinit(self.allocator);
@@ -5704,6 +5714,10 @@ pub const FunctionBuilder = struct {
         self.executable_target_type_obligations = .empty;
         self.executable_target_type_owner_sources.deinit(self.allocator);
         self.executable_target_type_owner_sources = .empty;
+        self.executable_representation_obligations.deinit(self.allocator);
+        self.executable_representation_obligations = .empty;
+        self.executable_representation_owner_sources.deinit(self.allocator);
+        self.executable_representation_owner_sources = .empty;
         self.executable_loop_targets.deinit(self.allocator);
         self.executable_loop_targets = .empty;
         self.executable_expr_by_source.deinit();
@@ -6007,9 +6021,11 @@ pub const FunctionBuilder = struct {
 
         // Before anything is drained: the resolution reads both the typed
         // expression list and the rendezvous map.
-        self.resolveExecutableTargetTypeOwners();
+        self.resolveExecutableObligationOwners();
         self.executable_target_type_owner_sources.deinit(self.allocator);
         self.executable_target_type_owner_sources = .empty;
+        self.executable_representation_owner_sources.deinit(self.allocator);
+        self.executable_representation_owner_sources = .empty;
 
         const parameters = try self.executable_parameters.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(parameters);
@@ -6054,6 +6070,8 @@ pub const FunctionBuilder = struct {
         }
         const target_type_obligations = try self.executable_target_type_obligations.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(target_type_obligations);
+        const representation_obligations = try self.executable_representation_obligations.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(representation_obligations);
         self.executable_local_ids.deinit();
         self.executable_local_ids = std.StringHashMap(LocalId).init(self.allocator);
         self.executable_symbol_ids.deinit();
@@ -6085,6 +6103,7 @@ pub const FunctionBuilder = struct {
             .owned_expr_id_slices = owned_expr_id_slices,
             .owned_cleanup_action_id_slices = owned_cleanup_action_id_slices,
             .target_type_obligations = target_type_obligations,
+            .representation_obligations = representation_obligations,
         };
     }
 
@@ -15360,6 +15379,33 @@ pub const FunctionBuilder = struct {
     /// realized as the block's terminator, which does not exist yet, so the
     /// obligation is parked per block and attached when the terminators are
     /// built.
+    /// Record the representation obligation the typed body carries for this
+    /// instruction, so a `RepresentationFact` joins `ExecutableBody` rather
+    /// than a `representation_check` / `representation_use` / `typed_load`
+    /// instruction and its `detail` string.
+    ///
+    /// The owner anchor is the instruction's own source; owners are resolved
+    /// once the body is finished, because a typed node is not always built
+    /// before the instruction whose fact names it -- and a use context often
+    /// has no node at all.
+    fn recordExecutableRepresentationObligation(
+        self: *FunctionBuilder,
+        obligation: mir_model.ExecutableRepresentationObligation,
+        source: SourcePoint,
+    ) !void {
+        if (!obligation.id.isValid()) return;
+        try self.executable_representation_obligations.append(self.allocator, obligation);
+        try self.executable_representation_owner_sources.append(self.allocator, source);
+    }
+
+    /// The obligation appended most recently, so the caller that patches the
+    /// fact it just appended patches the obligation beside it.
+    fn lastExecutableRepresentationObligation(self: *FunctionBuilder) ?*mir_model.ExecutableRepresentationObligation {
+        const items = self.executable_representation_obligations.items;
+        if (items.len == 0) return null;
+        return &items[items.len - 1];
+    }
+
     fn recordExecutableCallTargetObligation(
         self: *FunctionBuilder,
         obligation: mir_model.ExecutableCallTargetObligation,
@@ -16068,15 +16114,25 @@ pub const FunctionBuilder = struct {
     /// and a `for` element are realized after their `target_type` instruction
     /// is emitted, so resolving at record time left 559 obligations orphaned
     /// that in fact have a node.
-    fn resolveExecutableTargetTypeOwners(self: *FunctionBuilder) void {
+    fn resolveExecutableObligationOwners(self: *FunctionBuilder) void {
         for (
             self.executable_target_type_obligations.items,
             self.executable_target_type_owner_sources.items,
         ) |*obligation, source| {
-            const id = self.executable_expr_by_source.get(source) orelse continue;
-            if (!id.isValid() or id.index() >= self.executable_expressions.items.len) continue;
-            obligation.owner = id;
+            obligation.owner = self.executableOwnerForSource(source);
         }
+        for (
+            self.executable_representation_obligations.items,
+            self.executable_representation_owner_sources.items,
+        ) |*obligation, source| {
+            obligation.owner = self.executableOwnerForSource(source);
+        }
+    }
+
+    fn executableOwnerForSource(self: *const FunctionBuilder, source: SourcePoint) ExprId {
+        const id = self.executable_expr_by_source.get(source) orelse return .invalid;
+        if (!id.isValid() or id.index() >= self.executable_expressions.items.len) return .invalid;
+        return id;
     }
 
     fn recordExecutableTargetTypeObligation(
@@ -16499,6 +16555,12 @@ pub const FunctionBuilder = struct {
                 .typed_inst_id = typed_inst_id,
                 .typed_span_id = typed_span_id,
             });
+            try self.recordExecutableRepresentationObligation(.{
+                .id = typed_inst_id,
+                .kind = kind,
+                .result_type_id = typed_result_ty,
+                .value_id = typed_value_id orelse .invalid,
+            }, source);
         }
     }
 
@@ -17007,6 +17069,9 @@ pub const FunctionBuilder = struct {
         if (self.representation_facts.items.len != 0) {
             const fact = &self.representation_facts.items[self.representation_facts.items.len - 1];
             if (fact.typed_inst_id.eql(self.last_inst_id)) fact.use = use;
+        }
+        if (self.lastExecutableRepresentationObligation()) |obligation| {
+            if (obligation.id.eql(self.last_inst_id)) obligation.use = use;
         }
     }
 

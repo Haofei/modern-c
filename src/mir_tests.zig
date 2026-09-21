@@ -3282,8 +3282,8 @@ test "representation facts distinguish two operations that share one span" {
     try std.testing.expect(original_fact.typed_inst_id.isValid());
 
     const copy_inst_id = freshInstId(function);
-    const original_inst_id = try cloneInstructionWithInstId(function, std.testing.allocator, original_fact.kind, original_fact.detail, copy_inst_id);
-    try std.testing.expect(original_inst_id.eql(original_fact.typed_inst_id));
+    const original_inst_id = original_fact.typed_inst_id;
+    try cloneRepresentationObligation(function, module_mir.allocator, original_inst_id, copy_inst_id);
 
     const facts = try std.testing.allocator.alloc(mir.RepresentationFact, function.representation_facts.len + 1);
     @memcpy(facts[0..function.representation_facts.len], function.representation_facts);
@@ -8877,6 +8877,30 @@ test "MIR rejects duplicate call target facts" {
         break;
     }
     try std.testing.expectError(error.InvalidMirCallTargetFacts, mir.validateCallTargetFactsForLowering(typed_mir));
+}
+
+/// Append a copy of the representation obligation named by `id` under the
+/// identity `copy_id`, keeping everything else -- the shape a copied AST node
+/// produces.
+fn cloneRepresentationObligation(
+    function: *mir.Function,
+    allocator: std.mem.Allocator,
+    id: mir.InstId,
+    copy_id: mir.InstId,
+) !void {
+    const body = &function.executable_body;
+    for (body.representation_obligations) |obligation| {
+        if (!obligation.id.eql(id)) continue;
+        const obligations = try allocator.alloc(mir.ExecutableRepresentationObligation, body.representation_obligations.len + 1);
+        @memcpy(obligations[0..body.representation_obligations.len], body.representation_obligations);
+        var copy = obligation;
+        copy.id = copy_id;
+        obligations[body.representation_obligations.len] = copy;
+        allocator.free(body.representation_obligations);
+        body.representation_obligations = obligations;
+        return;
+    }
+    return error.TestUnexpectedResult;
 }
 
 /// Append a copy of the first target-type obligation of `kind` under the

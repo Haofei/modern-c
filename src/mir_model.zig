@@ -2671,6 +2671,56 @@ pub fn executableBoundsObligationCount(body: *const ExecutableBody, id: InstId, 
     return count;
 }
 
+/// A representation obligation carried by a typed node: the value this node
+/// produces has a representation the program must prove, or uses one in a
+/// context that depends on it.
+///
+/// `kind` is the instruction kind the obligation came from -- a
+/// `representation_check`, a `representation_use`, or a `typed_load` whose
+/// result type carries a niche -- and `use` is the typed use context, which
+/// only a `representation_use` has. Both were already typed on the fact;
+/// what the fact used to agree with the instruction about, and what is gone
+/// here, is `detail`: a `representation_use` spelled its use as a string
+/// beside the enum, and a check spelled its shape as one. The enum is the
+/// authority and the string was its rendering.
+pub const ExecutableRepresentationObligation = struct {
+    /// Join key. A `RepresentationFact` names this and nothing else; see
+    /// `BoundsFact.typed_inst_id` for why a span is not an identity.
+    id: InstId,
+    /// The typed expression that owns this obligation, or `.invalid` when no
+    /// node does -- a use context is a *position*, not a value, and the typed
+    /// body models it structurally (an assignment's value, a call's argument)
+    /// rather than as a node of its own.
+    owner: ExprId = .invalid,
+    kind: Instruction.Kind,
+    use: ?RepresentationUseKind = null,
+    result_type_id: TypeId = .invalid,
+    value_id: ValueId = .invalid,
+};
+
+/// How many typed representation obligations carry `id`.
+pub fn executableRepresentationObligationCount(body: *const ExecutableBody, id: InstId) usize {
+    if (!id.isValid()) return 0;
+    var count: usize = 0;
+    for (body.representation_obligations) |obligation| {
+        if (obligation.id.eql(id)) count += 1;
+    }
+    return count;
+}
+
+/// The single typed representation obligation named by `id`, or null when
+/// none or more than one carries it.
+pub fn executableRepresentationObligation(body: *const ExecutableBody, id: InstId) ?ExecutableRepresentationObligation {
+    if (!id.isValid()) return null;
+    var found: ?ExecutableRepresentationObligation = null;
+    for (body.representation_obligations) |obligation| {
+        if (!obligation.id.eql(id)) continue;
+        if (found != null) return null;
+        found = obligation;
+    }
+    return found;
+}
+
 /// A call-target obligation carried by a typed node: this node realizes the
 /// builtin or intrinsic call target `kind`.
 ///
@@ -2838,6 +2888,11 @@ pub const ExecutableBody = struct {
     /// `ExecutableTargetTypeObligation` for why they are one list here rather
     /// than a field on each node.
     target_type_obligations: []ExecutableTargetTypeObligation = &.{},
+    /// The representation obligations this body carries; a list rather than a
+    /// field on each node for the same reason the target-type obligations
+    /// are, and see `ExecutableRepresentationObligation` for why a use context
+    /// often has no node.
+    representation_obligations: []ExecutableRepresentationObligation = &.{},
 
     pub fn isComplete(self: *const ExecutableBody) bool {
         return self.complete;
@@ -2864,6 +2919,7 @@ pub const ExecutableBody = struct {
         for (self.owned_cleanup_action_id_slices) |ids| allocator.free(ids);
         if (self.owned_cleanup_action_id_slices.len != 0) allocator.free(self.owned_cleanup_action_id_slices);
         if (self.target_type_obligations.len != 0) allocator.free(self.target_type_obligations);
+        if (self.representation_obligations.len != 0) allocator.free(self.representation_obligations);
         self.* = .{};
     }
 };

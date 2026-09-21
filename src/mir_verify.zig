@@ -650,31 +650,71 @@ fn instructionAtSpan(function: Function, span_id: SpanId) ?Instruction {
     return matched;
 }
 
-/// Backends consume the owned representation fact table as an admission gate.
-/// A prebuilt MIR module must retain a one-to-one record for every
-/// representation-sensitive instruction; otherwise lowering fails closed rather
-/// than treating the raw AST as an alternative source of representation truth.
+/// A representation fact names the typed obligation it describes:
+/// `ExecutableExpression.representation_obligation`. One node, one fact, in
+/// both directions -- the builder records the obligation where it appends the
+/// fact, so a fact deleted from the table leaves an obligation no fact names
+/// and is caught.
+///
+/// The `detail` agreement is dropped rather than restated. It compared
+/// `RepresentationFact.detail` against the instruction's string, and for a
+/// `representation_use` it compared the same string against `@tagName(use)`:
+/// the enum was already the authority and the string its rendering. What the
+/// fact and the obligation agree about now is the instruction kind, the use
+/// context, the result `TypeId` and the value identity -- all typed.
+///
+/// The walk over representation-sensitive instructions remains only for a
+/// body the typed form does not represent; see `typedObligationsRepresented`.
 pub fn validateRepresentationFactsForLowering(module: Module) error{InvalidMirRepresentationFacts}!void {
     for (module.functions) |function| {
-        for (function.blocks) |block| {
-            for (block.instructions) |instruction| {
-                if (!representationFactKind(instruction.kind, instruction.result_ty)) continue;
-                if (countMatchingRepresentationFacts(function, instruction) != 1) return error.InvalidMirRepresentationFacts;
+        const body = &function.executable_body;
+        const typed = typedObligationsRepresented(module, function);
+        if (!typed) {
+            for (function.blocks) |block| {
+                for (block.instructions) |instruction| {
+                    if (!representationFactKind(instruction.kind, instruction.result_ty)) continue;
+                    if (countMatchingRepresentationFacts(function, instruction) != 1) return error.InvalidMirRepresentationFacts;
+                }
             }
         }
         for (function.representation_facts) |fact| {
             if (!representationFactTypedIdentitiesValid(function, fact)) return error.InvalidMirRepresentationFacts;
-            if (countMatchingRepresentationInstructions(function, fact) != 1) return error.InvalidMirRepresentationFacts;
-            // A `representation_use` fact carries the typed use context its
-            // instruction spells in `detail`, and nothing else does. Without
-            // this a consumer reading `fact.use` would silently fall back to
-            // the string it is replacing.
+            // A `representation_use` fact carries the typed use context, and
+            // nothing else does. Without this a consumer reading `fact.use`
+            // would silently fall back to the string it is replacing.
             if ((fact.kind == .representation_use) != (fact.use != null)) return error.InvalidMirRepresentationFacts;
-            if (fact.use) |use| {
-                if (!std.mem.eql(u8, @tagName(use), fact.detail)) return error.InvalidMirRepresentationFacts;
+            if (typed) {
+                if (mir_model.executableRepresentationObligationCount(body, fact.typed_inst_id) != 1)
+                    return error.InvalidMirRepresentationFacts;
+                const obligation = mir_model.executableRepresentationObligation(body, fact.typed_inst_id) orelse
+                    return error.InvalidMirRepresentationFacts;
+                if (!representationFactAgreesWithObligation(fact, obligation)) return error.InvalidMirRepresentationFacts;
+            } else if (countMatchingRepresentationInstructions(function, fact) != 1) {
+                return error.InvalidMirRepresentationFacts;
             }
         }
+        if (!typed) continue;
+        for (body.representation_obligations) |obligation| {
+            if (!executableObligationOwnerValid(body, obligation.owner)) return error.InvalidMirRepresentationFacts;
+            if (countRepresentationFactsForObligation(function, obligation.id) != 1) return error.InvalidMirRepresentationFacts;
+        }
     }
+}
+
+fn representationFactAgreesWithObligation(fact: RepresentationFact, obligation: mir_model.ExecutableRepresentationObligation) bool {
+    if (!fact.typed_inst_id.isValid() or !fact.typed_inst_id.eql(obligation.id)) return false;
+    if (fact.kind != obligation.kind) return false;
+    if (fact.use != obligation.use) return false;
+    if (!fact.typed_result_ty.eql(obligation.result_type_id)) return false;
+    return fact.typed_value_id.eql(obligation.value_id);
+}
+
+fn countRepresentationFactsForObligation(function: Function, id: mir_model.InstId) usize {
+    var count: usize = 0;
+    for (function.representation_facts) |fact| {
+        if (fact.typed_inst_id.eql(id)) count += 1;
+    }
+    return count;
 }
 
 /// An integer fact names the typed literal node its conversion belongs to:
@@ -2002,7 +2042,7 @@ pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTarge
         }
         if (typed) {
             for (body.target_type_obligations) |obligation| {
-                if (!targetTypeObligationOwnerValid(body, obligation)) return error.InvalidMirTargetTypeFacts;
+                if (!executableObligationOwnerValid(body, obligation.owner)) return error.InvalidMirTargetTypeFacts;
                 if (countMatchingTargetTypeFactsForObligation(function, obligation) != 1) {
                     if (hasStaleTargetTypeFactForObligation(function, obligation)) return error.StaleMirTargetTypeFacts;
                     return error.InvalidMirTargetTypeFacts;
@@ -2033,13 +2073,14 @@ pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTarge
     }
 }
 
-/// An obligation that names an owning node must name one that exists. A
-/// seventh of them own no node -- see `ExecutableTargetTypeObligation` --
-/// and that is not an error, but a dangling `ExprId` is.
-fn targetTypeObligationOwnerValid(body: *const mir_model.ExecutableBody, obligation: mir_model.ExecutableTargetTypeObligation) bool {
-    if (!obligation.owner.isValid()) return true;
-    const index = obligation.owner.index();
-    return index < body.expressions.len and body.expressions[index].id.eql(obligation.owner);
+/// An obligation that names an owning node must name one that exists. An
+/// obligation that owns no node is not an error -- see
+/// `ExecutableTargetTypeObligation` for why a tenth of the target-type ones
+/// do not -- but a dangling `ExprId` is.
+fn executableObligationOwnerValid(body: *const mir_model.ExecutableBody, owner: mir_model.ExprId) bool {
+    if (!owner.isValid()) return true;
+    const index = owner.index();
+    return index < body.expressions.len and body.expressions[index].id.eql(owner);
 }
 
 /// Everything the fact and the obligation must agree about except the target
@@ -2447,6 +2488,8 @@ fn countMatchingRepresentationInstructions(function: Function, fact: Representat
 
 /// A fact describes an instruction when it names it by identity and still
 /// agrees with it about kind, detail, result type, span and value identity.
+/// Used only for the bodies the typed form does not represent; see
+/// `validateRepresentationFactsForLowering`.
 fn representationFactMatchesInstruction(instruction: Instruction, fact: RepresentationFact) bool {
     return fact.typed_inst_id.isValid() and
         fact.typed_inst_id.eql(instruction.typed_inst_id) and
