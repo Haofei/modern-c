@@ -1,13 +1,19 @@
 {
   "schema_version": 1,
   "source_of_truth": "docs/backend-expected-failures.json",
-  "purpose": "Fixtures the C backend cannot compile today. `emit_c` covers tests/c_emit (checked by c-test); `sweep` covers the tests/spec corpus as the emit sweep chunks it (checked by spec-emit-sweep.py). Each entry is still asserted: it must fail, and fail for the recorded reason. A fixture that starts passing, stops failing for its recorded reason, or begins failing without an entry here fails its gate.",
+  "purpose": "Fixtures the C backend cannot compile today. `emit_c` covers tests/c_emit (checked by c-test); `sweep` covers the tests/spec corpus as the emit sweep chunks it (checked by spec-emit-sweep.py). Each entry is still asserted: it must fail, and fail for the recorded reason. A fixture that starts passing, stops failing for its recorded reason, or begins failing without an entry here fails its gate. `E_BACKEND_UNSUPPORTED` is the backend's single refusal code, so the code alone cannot tell one gap from another; every entry carrying it must also record a `cause` -- the refusing phase, category, construct and function the diagnostic names -- and the gates compare that, so a fixture that drifts to a different gap fails instead of resting on the entry written for the old one. The shape lives in tools/toolchain/backend_gap_lib.py.",
   "emit_c": [],
   "sweep": [
     {
       "fixture": "data_race_semantics.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
+      "cause": {
+        "category": "a body left incomplete by",
+        "construct": "unsupported_cast",
+        "function": "possibly_racing_raw_many_offset_zero_pointer_load",
+        "phase": "mir-build"
+      },
       "note": "The C emitter declines the fixture's kept chunk: C backend does not yet support a body left incomplete by `unsupported_cast` in `possibly_racing_raw_many_offset_zero_pointer_load` (declined by mir-build). This fixture is not one gap. Deleting each failing function and re-emitting enumerates 60 of them: 21 are an `index` expression over a slice of pointers that mir-build now accepts and the C backend's own admission still declines; 5 more are an array-of-pointers reached through a pointer; 3 are an aggregate pointer alias whose executable shape is incoherent; 1 is an array-element assignment; and 4 are the remaining families -- a `*T as [*]T` cast kind neither `ExecutableCastKind.classify` nor either renderer has, an indirect call through a pointer alias copied from a parameter, and a trapping store of a pointer into an aggregate field. See todo.md."
     },
     {

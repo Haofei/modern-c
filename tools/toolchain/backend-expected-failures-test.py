@@ -19,6 +19,8 @@ import re
 import sys
 from pathlib import Path
 
+from backend_gap_lib import STRUCTURED_REASON, cause_problem  # shared E_BACKEND_UNSUPPORTED cause shape
+
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "docs" / "backend-expected-failures.json"
 HARNESS = ROOT / "tools" / "toolchain" / "check-generated-c.sh"
@@ -33,6 +35,31 @@ INTERNAL_RE = re.compile(r"^[A-Z][A-Za-z0-9]+$")
 def fail(message: str) -> None:
     print(f"FAIL: backend-expected-failures-test - {message}", file=sys.stderr)
     sys.exit(1)
+
+
+def require_cause(fixture: str, entry: dict) -> None:
+    """Every `E_BACKEND_UNSUPPORTED` entry must record a structured cause.
+
+    The reason code is the backend's *only* refusal code, so an entry carrying
+    it says no more than "the backend said no somewhere". That is too weak to
+    hold a fixture to: the gap can move to a different phase, construct or
+    function and the entry still matches. A `cause` pins the refusal the entry
+    was written for, and the harnesses compare it. An entry failing for any
+    other reason names its own gap already, so it records no cause.
+    """
+    cause = entry.get("cause")
+    if entry["reason"] != STRUCTURED_REASON:
+        if cause is not None:
+            fail(f"{fixture} records a cause but fails with {entry['reason']!r}, "
+                 f"which is not {STRUCTURED_REASON}; the reason already names its gap")
+        return
+    if cause is None:
+        fail(f"{fixture} fails with {STRUCTURED_REASON}, which names no gap on its own; "
+             f"record a cause with the refusing phase, category, construct and function "
+             f"the diagnostic spells")
+    problem = cause_problem(cause)
+    if problem is not None:
+        fail(f"{fixture}: {problem}")
 
 
 def main() -> None:
@@ -79,6 +106,7 @@ def main() -> None:
             fail(f"{fixture} must record the reason it fails")
         if not (DIAGNOSTIC_RE.match(reason) or INTERNAL_RE.match(reason)):
             fail(f"{fixture} reason {reason!r} is neither an E_* code nor an error name")
+        require_cause(fixture, entry)
         note = entry.get("note")
         if not isinstance(note, str) or not note.strip():
             fail(f"{fixture} must carry a note saying why it cannot compile today")
@@ -105,16 +133,17 @@ def main() -> None:
             fail(f"sweep entry {fixture} must record the reason it fails")
         if stage == "EMIT" and not (DIAGNOSTIC_RE.match(reason) or INTERNAL_RE.match(reason)):
             fail(f"sweep entry {fixture} reason {reason!r} is neither an E_* code nor an error name")
+        require_cause(f"sweep entry {fixture}", entry)
         if not isinstance(note, str) or not note.strip():
             fail(f"sweep entry {fixture} must carry a note saying why it cannot compile today")
 
     # A manifest is only meaningful if the harnesses actually consult it.
     harness = HARNESS.read_text(encoding="utf-8")
-    for needle in ("docs/backend-expected-failures.json", "run_known_fixture"):
+    for needle in ("docs/backend-expected-failures.json", "run_known_fixture", "render_cause"):
         if needle not in harness:
             fail(f"{HARNESS.relative_to(ROOT)} no longer consults the manifest ({needle!r} missing)")
     sweep_harness = SWEEP_HARNESS.read_text(encoding="utf-8")
-    for needle in ("backend-expected-failures.json", "load_expected_failures", "failure_matches"):
+    for needle in ("backend-expected-failures.json", "load_expected_failures", "failure_matches", "parse_cause"):
         if needle not in sweep_harness:
             fail(f"{SWEEP_HARNESS.relative_to(ROOT)} no longer consults the manifest ({needle!r} missing)")
 
@@ -127,9 +156,11 @@ def main() -> None:
         key = entry["reason"] if entry["stage"] == "EMIT" else "clang-compile"
         sweep_reasons[key] = sweep_reasons.get(key, 0) + 1
     sweep_summary = ", ".join(f"{count} {reason}" for reason, count in sorted(sweep_reasons.items()))
+    caused = sum(1 for entry in entries + sweep_entries if entry.get("cause") is not None)
     print(
         f"PASS: backend-expected-failures-test - {len(entries)} known-failing c_emit fixtures ({summary}); "
-        f"{len(sweep_entries)} known-failing spec sweep fixtures ({sweep_summary})"
+        f"{len(sweep_entries)} known-failing spec sweep fixtures ({sweep_summary}); "
+        f"{caused} entries pinned to a structured {STRUCTURED_REASON} cause"
     )
 
 

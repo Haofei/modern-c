@@ -68,11 +68,19 @@ export -f run_pass_fixture
 
 expected_manifest="$ROOT/docs/backend-expected-failures.json"
 known_list="$out_dir/known-failing.list"
-python3 - "$expected_manifest" > "$known_list" <<'PY'
+# The needle each known-failing fixture must still fail with. `E_BACKEND_UNSUPPORTED`
+# is the backend's single refusal code, so an entry carrying it records a structured
+# `cause` as well and the needle is the whole rendered diagnostic -- the refusing
+# phase, category, construct and function -- not just the code. A fixture that drifts
+# to a different gap then fails this gate instead of resting on the old entry.
+python3 - "$expected_manifest" "$ROOT/tools/toolchain" > "$known_list" <<'PY'
 import json, sys
+sys.path.insert(0, sys.argv[2])
+from backend_gap_lib import render_cause
 manifest = json.load(open(sys.argv[1]))
 for entry in manifest["emit_c"]:
-    print(entry["fixture"] + "\t" + entry["reason"])
+    cause = entry.get("cause")
+    print(entry["fixture"] + "\t" + (render_cause(cause) if cause else entry["reason"]))
 PY
 
 is_known_failing() {
@@ -155,7 +163,8 @@ run_known_fixture() {
         echo "FAIL: c-test — $fixture failed with no diagnostic at all" >&2
         return 1
     fi
-    if ! printf '%s' "$out" | grep -q "$want"; then
+    # -F: a recorded cause is a whole rendered diagnostic, not a regex.
+    if ! printf '%s' "$out" | grep -Fq "$want"; then
         echo "FAIL: c-test — $fixture no longer fails with $want; update docs/backend-expected-failures.json" >&2
         printf '%s\n' "$out" | head >&2
         return 1
@@ -165,7 +174,9 @@ export -f run_known_fixture
 
 known=$(mc_count_lines "$known_list")
 if [ "$known" -gt 0 ]; then
-    tr '\t' '\n' < "$known_list" | xargs -P "$jobs" -n 2 bash -c 'run_known_fixture "$0" "$1" "$2"' "$exe"
+    # NUL-delimited: a recorded cause is a rendered diagnostic with spaces in it,
+    # so whitespace must not split one needle into several arguments.
+    tr '\t\n' '\0\0' < "$known_list" | xargs -0 -P "$jobs" -n 2 bash -c 'run_known_fixture "$0" "$1" "$2"' "$exe"
 fi
 
 echo "PASS: c-test — $pass fixtures compile; $reject reject fixtures diagnosed; $known known-failing fixtures still fail for their recorded reason"

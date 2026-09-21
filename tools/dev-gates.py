@@ -177,6 +177,7 @@ RULES: tuple[Rule, ...] = (
         (
             "docs/backend-expected-failures.json",
             "tools/toolchain/backend-expected-failures-test.py",
+            "tools/toolchain/backend_gap_lib.py",
             "tools/toolchain/check-generated-c.sh",
             "tools/toolchain/spec-emit-sweep.py",
         ),

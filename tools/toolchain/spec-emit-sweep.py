@@ -15,6 +15,7 @@ fixture fails to emit or compile.
 """
 import sys, os, re, glob, json, subprocess, tempfile, concurrent.futures
 from spec_sweep_lib import valid_program  # shared comment-aware negative-fixture stripping
+from backend_gap_lib import STRUCTURED_REASON, parse_cause  # shared E_BACKEND_UNSUPPORTED cause shape
 
 # Fixtures excluded from the C-emit sweep, each mapped to the reason it is not a
 # C-emission fixture in the first place. Every entry is a phase=sema / phase=parse
@@ -125,8 +126,46 @@ def load_expected_failures():
     return entries
 
 
+def failure_mismatch(entry, kind, message):
+    """Why a measured failure is not the one `entry` records, or None if it is.
+
+    Stage and reason code are the coarse half. `E_BACKEND_UNSUPPORTED` is the
+    backend's single refusal code, so on its own it cannot tell "the builder
+    left this body incomplete" apart from "the renderer has no case for this
+    expression" -- a different gap, in a different file, needing a different
+    fix. When the entry records a structured `cause`, the measured diagnostic
+    must still name the same refusing phase, category, construct and function,
+    so a fixture that drifts to another gap fails the gate instead of resting
+    on the entry that was written for the old one.
+
+    `failure_matches` was this predicate; it is named for its answer now,
+    because a drift report that cannot say *what* drifted sends the reader back
+    to re-measure by hand.
+    """
+    if entry["stage"] != kind:
+        return f"stage is {kind}, recorded {entry['stage']}"
+    if entry["reason"] not in message:
+        return f"reason {entry['reason']} no longer appears"
+    cause = entry.get("cause")
+    if cause is None:
+        return None
+    measured = parse_cause(message)
+    if measured is None:
+        return f"the diagnostic carries no {STRUCTURED_REASON} function-decline cause to match the recorded one"
+    drifted = [
+        f"{field} is {measured.get(field)!r}, recorded {cause[field]!r}"
+        for field in cause
+        if measured.get(field) != cause[field]
+    ]
+    if drifted:
+        return "; ".join(drifted)
+    return None
+
+
+# Kept as the name the manifest validator greps for: this module still consults
+# the manifest through exactly one predicate.
 def failure_matches(entry, kind, message):
-    return entry["stage"] == kind and entry["reason"] in message
+    return failure_mismatch(entry, kind, message) is None
 
 
 def main():
@@ -163,10 +202,12 @@ def main():
         entry = expected.get(name)
         if entry is None:
             unexpected.append(failure)
-        elif failure_matches(entry, kind, message):
+            continue
+        mismatch = failure_mismatch(entry, kind, message)
+        if mismatch is None:
             known.append(failure)
         else:
-            drifted.append(failure)
+            drifted.append((failure, mismatch))
 
     print(f"spec fixtures swept: {swept}, valid functions checked: {kept_fns}")
     if oos_failures:
@@ -186,8 +227,8 @@ def main():
         status = 1
     if drifted:
         print(f"FAIL: {len(drifted)} known-failing fixture(s) now fail differently; update docs/backend-expected-failures.json:")
-        for n, k, m in drifted:
-            print(f"  [{k}] {n}: {m}\n        recorded: [{expected[n]['stage']}] {expected[n]['reason']}")
+        for (n, k, m), why in drifted:
+            print(f"  [{k}] {n}: {m}\n        recorded: [{expected[n]['stage']}] {expected[n]['reason']}\n        drift: {why}")
         status = 1
     if fixed:
         print(f"FAIL: {len(fixed)} fixture(s) listed as known-failing now emit; remove their entries from docs/backend-expected-failures.json:")

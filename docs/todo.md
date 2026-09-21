@@ -68,7 +68,7 @@ backends off syntax, is described in
 | Parsing and source identity are per file; no combined textual source exists. | `src/loader.zig`, `src/module_parser.zig` |
 | Every declaration has a `DefId`; sema records an interned resolved type for every expression it types, and the MIR builder reads those instead of re-inferring where the table answers. | `src/sema_symbols.zig`, `src/sema_types.zig`, debug agree-assertions in `src/mir_build.zig` |
 | Every instruction-scoped fact joins to its instruction by identity, not by source span, with an exactly-one invariant: integer, float, bounds, representation, target-type, call-target, `const_get`, bind-thunk and range. Resolved accesses key on an `AccessId`. A span repeats -- monomorphization copies one -- so it was never an identity. | `src/mir_verify.zig`, `src/mir_body_plan.zig`, `src/mir_tests.zig` |
-| A red sweep is a failure, not background noise. | `docs/backend-expected-failures.json` and the `backend-expected-failures-test` validator |
+| A red sweep is a failure, not background noise, and a recorded gap is pinned to the *cause* it was recorded for, not merely to `E_BACKEND_UNSUPPORTED`. | `docs/backend-expected-failures.json` and the `backend-expected-failures-test` validator; the shared cause shape in `tools/toolchain/backend_gap_lib.py` |
 | A non-zero `mcc` exit always prints a diagnostic. | `src/diagnostics.zig`, `src/compiler_session.zig` tests |
 
 ## Active priorities
@@ -81,7 +81,7 @@ backends off syntax, is described in
 | P1 | Give expressions a node identity that survives copying, or a per-instance span remap in monomorphization. | Unblocks monomorphizing after sema and stops instances failing closed in the resolved table. |
 | P1 | Bring the C backend's `ast_bridge` / `type_bridge` imports to zero, one file at a time. | The exceptions table in `src/architecture_boundary_tests.zig` is the countdown. LLVM is already at zero. |
 | P1 | Finish converting golden tests into fixtures: the MIR *dump* corpus is now `tests/mir/` (see `test-architecture.md`), but the `appendVerificationFactsFrom*` sites in `src/mir_tests.zig` are still in-Zig golden strings, as are the emitted-C goldens in `src/lower_c_tests.zig`. | The in-Zig golden strings are the largest consumer of the legacy instruction stream and the reason representation changes turn into mass test rewrites. |
-| P1 | Clear the remaining `docs/backend-expected-failures.json` entries or record a precise cause for each. | Each entry is a backend feature gap with a minimal reproduction. The deref-of-a-call-result family is the largest one left; see the note below for what it actually needs. |
+| P1 | Clear the remaining `docs/backend-expected-failures.json` entries or record a precise cause for each. | Each entry is a backend feature gap with a minimal reproduction. Every `E_BACKEND_UNSUPPORTED` entry now carries a machine-checked `cause` (refusing phase, category, construct, function), so an entry can no longer outlive the gap it was written for. See the note below for what is left. |
 | P2 | Split `src/mir_build.zig` by construct family and extract the shared AST-query surface still in `src/mir.zig`. | Readability. No behavior change. |
 | P2 | Audit `tools/` for scripts no gate runs; mark spec sections by maturity inline. | Hygiene. |
 
