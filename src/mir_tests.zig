@@ -3324,8 +3324,8 @@ test "range facts distinguish two unchecked operations that share one span" {
     try std.testing.expect(original_fact.typed_inst_id.isValid());
 
     const copy_inst_id = freshInstId(function);
-    const original_inst_id = try cloneInstructionWithInstId(function, std.testing.allocator, .unchecked_assume, null, copy_inst_id);
-    try std.testing.expect(original_inst_id.eql(original_fact.typed_inst_id));
+    const original_inst_id = original_fact.typed_inst_id;
+    try cloneRangeObligation(function, module_mir.allocator, original_inst_id, copy_inst_id);
 
     const facts = try std.testing.allocator.alloc(RangeFact, 2);
     facts[0] = original_fact;
@@ -8877,6 +8877,33 @@ test "MIR rejects duplicate call target facts" {
         break;
     }
     try std.testing.expectError(error.InvalidMirCallTargetFacts, mir.validateCallTargetFactsForLowering(typed_mir));
+}
+
+/// Append a copy of the typed expression carrying the range obligation named
+/// by `id`, giving the copy `copy_id` as its own obligation. The copy keeps
+/// the original's span -- what a copied AST node produces.
+fn cloneRangeObligation(
+    function: *mir.Function,
+    allocator: std.mem.Allocator,
+    id: mir.InstId,
+    copy_id: mir.InstId,
+) !void {
+    const body = &function.executable_body;
+    for (body.expressions) |expression| {
+        const obligation = expression.range_obligation orelse continue;
+        if (!obligation.id.eql(id)) continue;
+        const expressions = try allocator.alloc(mir.ExecutableExpression, body.expressions.len + 1);
+        @memcpy(expressions[0..body.expressions.len], body.expressions);
+        var copy = expression;
+        copy.id = mir.ExprId.fromIndex(body.expressions.len);
+        copy.inst_id = .invalid;
+        copy.range_obligation.?.id = copy_id;
+        expressions[body.expressions.len] = copy;
+        allocator.free(body.expressions);
+        body.expressions = expressions;
+        return;
+    }
+    return error.TestUnexpectedResult;
 }
 
 /// Append a copy of the representation obligation named by `id` under the

@@ -833,21 +833,51 @@ fn countFloatFactsForConversion(function: Function, id: mir_model.InstId) usize 
     return count;
 }
 
-/// No-overflow facts name their `unchecked_assume` instruction by identity.
-/// They remain separately useful to C/LLVM for target-label diagnostics, but
-/// an admission candidate must still name exactly one unchecked instruction,
-/// and be the only fact for that instruction and target label.
-/// Executable-body completeness separately proves that every unchecked
-/// executable projection has a fact, because one source operation can have
-/// several such projections.
+/// A no-overflow fact names the typed range obligation the operation it
+/// describes owns: `ExecutableExpression.range_obligation`.
+///
+/// Several facts name one obligation on purpose -- the same operation is
+/// recorded once per target label (as a binary operand, an aggregate element,
+/// a field, and as the assigned value) -- so the uniqueness rule is stated
+/// within a target-label group, exactly as it was, while each fact must still
+/// name exactly one obligation. Executable-body completeness separately
+/// proves that every unchecked executable projection has a fact.
+///
+/// The obligation carries the operation as `ExecutableUncheckedOp`, which is
+/// the typed form of `RangeFact.op`; that field is still text in the legacy
+/// table, so the agreement crosses `@tagName` until it is not. Everything
+/// else the fact used to agree with the `unchecked_assume` instruction about
+/// -- the contract region, the span and the result type -- is on the
+/// obligation.
+///
+/// The walk over `unchecked_assume` instructions remains only for a body the
+/// typed form does not represent; see `typedObligationsRepresented`.
 pub fn validateRangeFactsForLowering(module: Module) error{InvalidMirRangeFacts}!void {
     for (module.functions) |function| {
+        const body = &function.executable_body;
+        const typed = typedObligationsRepresented(module, function);
         for (function.range_facts) |fact| {
             if (!rangeFactTypedIdentityValid(function, fact)) return error.InvalidMirRangeFacts;
             if (countMatchingRangeFactsInOwnershipGroup(function, fact) != 1) return error.InvalidMirRangeFacts;
-            if (countMatchingRangeInstructions(function, fact) != 1) return error.InvalidMirRangeFacts;
+            if (typed) {
+                if (mir_model.executableRangeObligationCount(body, fact.typed_inst_id) != 1)
+                    return error.InvalidMirRangeFacts;
+                const obligation = mir_model.executableRangeObligation(body, fact.typed_inst_id) orelse
+                    return error.InvalidMirRangeFacts;
+                if (!rangeFactAgreesWithObligation(function, fact, obligation)) return error.InvalidMirRangeFacts;
+            } else if (countMatchingRangeInstructions(function, fact) != 1) {
+                return error.InvalidMirRangeFacts;
+            }
         }
     }
+}
+
+fn rangeFactAgreesWithObligation(function: Function, fact: RangeFact, obligation: mir_model.ExecutableRangeObligation) bool {
+    if (!fact.typed_inst_id.isValid() or !fact.typed_inst_id.eql(obligation.id)) return false;
+    if (fact.region_id != obligation.region_id) return false;
+    if (!fact.typed_span_id.eql(obligation.span_id)) return false;
+    if (!std.mem.eql(u8, fact.op, @tagName(obligation.op))) return false;
+    return typeIdMatchesValueType(function, obligation.result_type_id, fact.result_ty);
 }
 
 /// A bounds fact names the typed bounds obligation its check realizes, and
@@ -2386,7 +2416,9 @@ fn rangeFactTypedIdentityValid(function: Function, fact: RangeFact) bool {
 }
 
 /// A fact describes an unchecked instruction when it names it by identity
-/// and still agrees with it about region, span, operation and type.
+/// and still agrees with it about region, span, operation and type. Used only
+/// for the bodies the typed form does not represent; see
+/// `validateRangeFactsForLowering`.
 fn rangeFactMatchesInstruction(fact: RangeFact, instruction: Instruction) bool {
     if (instruction.kind != .unchecked_assume or instruction.contract_region_id == null) return false;
     const op = noOverflowUncheckedOp(instruction.detail) orelse return false;

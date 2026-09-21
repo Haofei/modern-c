@@ -104,7 +104,7 @@ that the typed body does not represent as a node at all:
 | representation | `representation_check` / `representation_use`, agreeing on `kind` and `detail` | **Done.** Joins a row of `ExecutableBody.representation_obligations`; the `detail` agreement is gone. |
 | target-type | `target_type`, agreeing on `detail` (the `TargetTypeKind` tag) | **Done.** Joins a row of `ExecutableBody.target_type_obligations`, which names its owning node; see below. |
 | call-target | `call_target` | **Done.** Joins `ExecutableExpression.call_target_obligation`, or `ExecutableTerminator.call_target_obligation` for a diverging explicit trap; see below. |
-| range | `unchecked_assume` inside a `no_overflow` contract region | No. |
+| range | `unchecked_assume` inside a `no_overflow` contract region | **Done.** Joins `ExecutableExpression.range_obligation`; several facts name one obligation, one per target label. |
 | access facts | `index` / `expr` | No. |
 | bind-thunk | `call_target` and `target_type`; its closure-local half really is `.local`, a joinable kind | No, for a different reason: `BindThunkFact` names the closure local by `closure_value_id`, and `ExecutableLocalIdentity` carries no `ValueId`. There is no recorded correspondence to join on, and joining by spelling would be weaker than what is there. |
 | ownership events | none -- `verifyFunctionOwnershipEvents` does not walk the stream | Already off it. |
@@ -260,6 +260,18 @@ it was made: `RepresentationFact.detail` against `Instruction.detail`, and
 were -- the enum was already the authority and the string its rendering. What
 the fact and the obligation agree about is the instruction kind, the use
 context, the result `TypeId` and the value identity, all typed.
+
+**The range family fits the single field again**, with one wrinkle worth
+naming: several `RangeFact`s legitimately name one obligation, because the
+same unchecked operation is recorded once per target label -- as a binary
+operand, an aggregate element, a field, and as the assigned value. The label
+is the fact's business and the obligation is the operation's, so the
+uniqueness rule stays stated within a target-label group while each fact must
+name exactly one obligation. `ExecutableExpression.range_obligation` carries
+the contract region, the span, the result `TypeId`, and the operation as
+`ExecutableUncheckedOp` -- the typed form of `RangeFact.op`, which is still
+text in the legacy table, so that one agreement crosses `@tagName` until the
+fact is typed too.
 
 **What moved and what was dropped.** Everything
 `targetTypeFactAgreesWithInstruction` checked -- `target_index`, target owner,

@@ -1345,6 +1345,9 @@ pub const ExecutableExpression = struct {
     /// not realize a builtin/intrinsic call target. A `CallTargetFact` names
     /// it; see `ExecutableCallTargetObligation`.
     call_target_obligation: ?ExecutableCallTargetObligation = null,
+    /// The no-overflow range obligation this node owns, or null. A `RangeFact`
+    /// names it; see `ExecutableRangeObligation`.
+    range_obligation: ?ExecutableRangeObligation = null,
     span_id: SpanId = .invalid,
     result_ty: ValueType,
     type_id: TypeId = .invalid,
@@ -2714,6 +2717,65 @@ pub fn executableRepresentationObligation(body: *const ExecutableBody, id: InstI
     if (!id.isValid()) return null;
     var found: ?ExecutableRepresentationObligation = null;
     for (body.representation_obligations) |obligation| {
+        if (!obligation.id.eql(id)) continue;
+        if (found != null) return null;
+        found = obligation;
+    }
+    return found;
+}
+
+/// The unchecked arithmetic a `no_overflow` contract region proves.
+pub const ExecutableUncheckedOp = enum {
+    add,
+    sub,
+    mul,
+
+    pub fn fromCallTarget(kind: CallTargetKind) ?ExecutableUncheckedOp {
+        return switch (kind) {
+            .unchecked_add => .add,
+            .unchecked_sub => .sub,
+            .unchecked_mul => .mul,
+            else => null,
+        };
+    }
+};
+
+/// A no-overflow range obligation carried by a typed node: this operation is
+/// performed unchecked, inside contract region `region_id`, because the
+/// region proves it cannot overflow.
+///
+/// One node owns at most one, but *several* `RangeFact`s may name it: the
+/// same operation is recorded once per target label (as a binary operand, an
+/// aggregate element, a field, and as the assigned value). The label is the
+/// fact's business; the obligation is the operation's.
+pub const ExecutableRangeObligation = struct {
+    /// Join key. A `RangeFact` names this and nothing else; see
+    /// `BoundsFact.typed_inst_id` for why a span is not an identity.
+    id: InstId,
+    region_id: usize,
+    op: ExecutableUncheckedOp,
+    result_type_id: TypeId = .invalid,
+    span_id: SpanId = .invalid,
+};
+
+/// How many typed nodes carry `id` as their range obligation.
+pub fn executableRangeObligationCount(body: *const ExecutableBody, id: InstId) usize {
+    if (!id.isValid()) return 0;
+    var count: usize = 0;
+    for (body.expressions) |expression| {
+        const obligation = expression.range_obligation orelse continue;
+        if (obligation.id.eql(id)) count += 1;
+    }
+    return count;
+}
+
+/// The single typed range obligation named by `id`, or null when none or more
+/// than one carries it.
+pub fn executableRangeObligation(body: *const ExecutableBody, id: InstId) ?ExecutableRangeObligation {
+    if (!id.isValid()) return null;
+    var found: ?ExecutableRangeObligation = null;
+    for (body.expressions) |expression| {
+        const obligation = expression.range_obligation orelse continue;
         if (!obligation.id.eql(id)) continue;
         if (found != null) return null;
         found = obligation;

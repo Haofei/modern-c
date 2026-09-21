@@ -14239,7 +14239,7 @@ pub const FunctionBuilder = struct {
                     }
                 }
                 if (unchecked_target) |target|
-                    try self.addRangeFactForUncheckedCall(callee_name, node.args, target.result_ty, expr.span, call_inst_id);
+                    try self.addRangeFactForUncheckedCall(callee_name, target.kind, node.args, target.result_ty, expr.span, call_inst_id);
                 const preserves_pointer_provenance = raw_many_offset_target != null or reflectionCallPreservesPointerProvenance(node);
                 if (!preserves_pointer_provenance and instr_kind == .call) try self.recordPointerProvenanceCallInvalidation(.call, expr.span);
                 if (!preserves_pointer_provenance and instr_kind == .indirect_call) try self.recordPointerProvenanceCallInvalidation(.indirect_call, expr.span);
@@ -15404,6 +15404,31 @@ pub const FunctionBuilder = struct {
         const items = self.executable_representation_obligations.items;
         if (items.len == 0) return null;
         return &items[items.len - 1];
+    }
+
+    /// Record the no-overflow range obligation on the typed node that
+    /// performs the operation, so a `RangeFact` joins a node in
+    /// `ExecutableBody` rather than an `unchecked_assume` instruction the
+    /// typed body does not represent.
+    ///
+    /// Idempotent: the same operation is recorded once per target label, and
+    /// every one of those facts names this one obligation.
+    fn recordExecutableRangeObligation(
+        self: *FunctionBuilder,
+        obligation: mir_model.ExecutableRangeObligation,
+        span_id: SpanId,
+    ) void {
+        if (!obligation.id.isValid()) return;
+        for (self.executable_expressions.items) |*expression| {
+            if (expression.range_obligation) |existing| {
+                if (existing.id.eql(obligation.id)) return;
+            }
+        }
+        for (self.executable_expressions.items) |*expression| {
+            if (!expression.span_id.eql(span_id) or expression.range_obligation != null) continue;
+            expression.range_obligation = obligation;
+            return;
+        }
     }
 
     fn recordExecutableCallTargetObligation(
@@ -16809,13 +16834,22 @@ pub const FunctionBuilder = struct {
     /// `addAggregateRangeFactForUncheckedExpr` while walking the enclosing
     /// expression, before this instruction existed; they are pending until
     /// here, where they take its identity.
-    fn addRangeFactForUncheckedCall(self: *FunctionBuilder, callee_name: []const u8, args: []ast.Expr, result_ty: ValueType, span: ast.Span, inst_id: InstId) !void {
+    fn addRangeFactForUncheckedCall(self: *FunctionBuilder, callee_name: []const u8, unchecked_kind: CallTargetKind, args: []ast.Expr, result_ty: ValueType, span: ast.Span, inst_id: InstId) !void {
         const op = noOverflowUncheckedOp(callee_name) orelse return;
         if (args.len < 2) return;
         const region_id = self.active_contract_region_id orelse return;
         if (self.active_contract == null or !std.mem.eql(u8, self.active_contract.?, "no_overflow")) return;
         const target = self.assignment_target orelse "value";
         const typed_span_id = try self.internSpanId(self.sourcePoint(span));
+        if (mir_model.ExecutableUncheckedOp.fromCallTarget(unchecked_kind)) |typed_op| {
+            self.recordExecutableRangeObligation(.{
+                .id = inst_id,
+                .region_id = region_id,
+                .op = typed_op,
+                .result_type_id = try self.internTypeId(result_ty),
+                .span_id = typed_span_id,
+            }, typed_span_id);
+        }
         for (self.range_facts.items) |*fact| {
             if (fact.typed_inst_id.isValid()) continue;
             if (fact.region_id == region_id and std.mem.eql(u8, fact.op, op) and fact.typed_span_id.eql(typed_span_id)) fact.typed_inst_id = inst_id;
