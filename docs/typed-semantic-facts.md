@@ -101,8 +101,15 @@ Not yet typed — the honest list:
   projection. `todo.md` records the measurement.
 - **The legacy instruction stream and the typed body are joined, but the
   stream is still there.** See [the join](#the-join-between-the-two-bodies)
-  below. The remaining `Instruction.detail` readers are listed in
-  [`todo.md`](todo.md).
+  below. The remaining `Instruction.detail` readers, every remaining consumer
+  of the stream, and the measurement that says why it cannot be deleted yet
+  are listed in [`todo.md`](todo.md). In short: 28% of functions have no typed
+  body for their obligations to live on, and five consumers are genuine --
+  the representation-dominance dataflow behind `E_REPRESENTATION_CHECK_MISSING`,
+  the `#[irq_context]` call walk, the contract-region pairing behind
+  `E_UNCHECKED_OUTSIDE_CONTRACT`, the cleanup CFG's `(block, instruction index)`
+  action identity that both backends consume, and `lower_c_map`'s source-map
+  provenance and MIR digest.
 
 ## Refusals are values, not instructions
 

@@ -75,7 +75,7 @@ backends off syntax, is described in
 
 | Priority | Work | Why, and what it depends on |
 |---|---|---|
-| P0 | Collapse MIR to the single `ExecutableBody`: the instruction-scoped fact tables are folded into typed obligations (all eleven families), the dump shows the typed body, and the finding channel is a typed `Function.findings` list rather than a `detail` string (see the notes below). What is left is deleting `Function.blocks[].instructions` itself. | The core of the original design review. Two body representations cost every change twice. The fold had to come first, because surveying all eleven verifier families showed none could move until the typed body represented the obligations the checking instructions carry. Depends on the golden-test conversion for affordability. |
+| P0 | Collapse MIR to the single `ExecutableBody`: the instruction-scoped fact tables are folded into typed obligations (all eleven families), the dump shows the typed body, and the finding channel is a typed `Function.findings` list rather than a `detail` string. Deleting `Function.blocks[].instructions` is **blocked**, and the note below says by what: 28% of functions have no typed body to carry their obligations, and five genuine consumers remain -- the representation-dominance dataflow, the irq-context walk, the contract-region pairing, the cleanup CFG's action identity, and the source map. | The core of the original design review. Two body representations cost every change twice. The fold had to come first, because surveying all eleven verifier families showed none could move until the typed body represented the obligations the checking instructions carry. Depends on the golden-test conversion for affordability. |
 | P0 | Replace the string-carrying `mir.ValueType` with type ids from the resolved table, then drop the parallel `typed_result_ty` mirrors. | Falls out once the table answers everything `ValueType.name()` is asked for. |
 | P0 | Finish the sema handoff: intrinsic call results where sema and builder share one rule, `address_of` / `borrow` / `~`, alias collapse once the emitters take spellings from the table, and deletion of the builder's own type maps once unit tests build MIR through a checker. | Each slice: record in sema, read in the builder under the agree-assertion, delete the builder copy. |
 | P1 | Give expressions a node identity that survives copying, or a per-instance span remap in monomorphization. | Unblocks monomorphizing after sema and stops instances failing closed in the resolved table. |
@@ -692,6 +692,78 @@ not show.
   null, so it never produced a row of its own. `result` is the only family
   whose instruction appeared in bodies that *do* lower: `try_handled` is
   recorded 108 times in accepted programs.
+
+### Note: what still consumes `Function.blocks[].instructions`, measured
+
+Every non-test reader of the instruction stream, enumerated after the finding
+channel left it, and classified as **(a)** deletable with the stream, **(b)**
+blocked on the typed body representing something it does not, or **(c)** a
+genuine consumer that has to be rewritten before the stream can go.
+
+The conclusion first, because it decides the next step: **(b) and (c) are both
+non-empty and neither is bounded, so the stream is not deleted.** Five distinct
+consumers are (c), and three of them are checks that produce user-visible
+diagnostics with no typed counterpart designed yet.
+
+| Reader | Class | What it is |
+|---|---|---|
+| `mir_verify.verifyFunctionInstructionIdentities` / `instructionTypedIdentitiesValid` | **a** | verifies the stream itself; there is nothing left to verify once it is gone |
+| `mir_verify.validateInstructionSpanIdentitiesForLowering` | **a** | every instruction resolves a source point -- a statement about instructions |
+| `mir_verify.functionHasInstructionId`, the stream half of `validateExecutableBodyJoinForLowering` | **a** | the join exists *because* there are two bodies |
+| `mir_dump.appendDumpFromMir`'s `mir instr` rows | **a** | the legacy dump of the thing being deleted |
+| `Module.deinit` / `mir_build.freeFunction` / `mir_build`'s own writes | **a** | allocation, and the producer |
+| `mir_body_plan.zig` (entire module: `verifyInstructions`, `buildBlocks`, `verifyAccessFacts`, `indexInstructionForFact`, `verifyDeferCleanupRef`) | **a** | **no non-test module imports it.** `@import("mir_body_plan.zig")` appears only in `mir_tests.zig`, `mir_body_plan_tests.zig`, `test_root_mir.zig` and `architecture_boundary_tests.zig`. It is no longer "the body plans lowering consumes"; lowering consumes `ExecutableBody` |
+| `verified_program.zig`, `backend_cleanup.zig`, `mir_representation.zig` hand-built `Instruction` literals | **a** | inside `test {}` blocks only |
+| the eleven families' fallback walks (`countMatchingBoundsInstructions`, `countMatchingConstGetInstructions`, `countConstGetInstructionsAtSource`, `countConstGetCallTargetsAtSource`, `countTargetTypeInstructionsAtSource`, `matchingIndexInstruction`, `matchingRangeSliceInstruction`, `countMatchingTargetTypeInstructions`, `countMatchingCallTargetInstructions`, `countMatchingIntegerInstructions`, `countMatchingFloatInstructions`, `countMatchingRangeInstructions`, `countMatchingRepresentationInstructions`, `instructionAtSpan`, `bindFactHasClosureLocal`) | **b** | the typed body must represent an incomplete body, an `extern` declaration and a global initializer's pseudo-callable. See the measurement below |
+| `mir_verify.validateKnownFactTypesForLowering`'s stream half | **b** | the typed half is already proven in `mir_executable_body.verify`; the stream half covers the same three unrepresented shapes. Tried and reverted once already -- see the note above |
+| `mir_verify.typeForId`'s fallback | **b** | recovers a `ValueType` for a `TypeId` whose identity row carries only a spelling, by finding an instruction with that result type. Goes when `ValueType` does (the next P0) |
+| `mir.blockLastSpan` | **c** | a block's diagnostic *position* is its last instruction's. `functionFallsThrough` (`E_RETURN_MISSING`, `E_NEVER_FALLTHROUGH`) and `cfgHasStructuralError` (`E_MIR_CFG`) both report there. The typed body has no per-block source point to replace it with |
+| `mir_representation.producerHasDominatingCheck` / `useHasDominatingCheck` / `blockHasDominatingCheck` | **c** | `E_REPRESENTATION_CHECK_MISSING`. A **dataflow** over the stream: a representation-sensitive producer or use must have a dominating `representation_check` for the same `ValueId`, searched backwards through the block and then through predecessors. The typed body records representation *obligations*, not a dominance relation, so this is a new typed analysis, not a restatement |
+| `mir.irqContextCallFinding` | **c** | `E_IRQ_CONTEXT_CALL` / `E_IRQ_CONTEXT_BLOCKING`. Walks `call` / `indirect_call` instructions and reads `detail` as the **callee name**, then asks the module whether that callee is itself `#[irq_context]`. The typed body has a `SymbolId` on a call, which is the better key -- but the walk also has to reach indirect calls, where there is no symbol |
+| `mir.uncheckedAssumeHasMatchingContract` | **c** | `E_UNCHECKED_OUTSIDE_CONTRACT`. Pairs an `unchecked_assume` instruction with the `ContractRegion` its `contract_region_id` names, reading `detail` as the unchecked operation name. Contract regions are line ranges over the stream; the typed body does not model a region at all |
+| `mir_cleanup_cfg.buildDeferCleanupEdgeTable`, `deferCleanupRefValid`, `deferCleanupRefAtSource`, `deferCleanupEdgeActionRefValid`, `cleanupEdgeSourceForBlock`, `ownershipEventValid` | **c** | **a cleanup action's identity is a stream index.** `DeferCleanupRef` is `{ block_id, instruction_index, source }` and `OwnershipEvent.instruction_index` is validated against `block.instructions.len`. The resulting `Function.cleanup_cfg` is read by `lower_c_emitter.zig` and `lower_llvm.zig`, so this is on the lowering path. `defer_cleanup` *is* a joinable kind, so a typed statement exists for one in a complete body -- but not in the incomplete bodies `deferCleanupRefValid` must still answer for, and the reverse-order walk that orders the actions has no typed equivalent |
+| `lower_c_map.appendMirFactsDigestInput` | **c** | the `mir_facts_sha256` in every `.mcmeta` sidecar hashes one `instr` row per instruction |
+| `lower_c_map.cLineDirectiveSourceLine` (two walks), `functionHasInstructionOnRenderedLine` | **c** | every source-map row carries `mir_block="mir:<fn>:block:<b>:instr:<n>:<kind>"`, and a rendered line's label is chosen by looking for an instruction of a given kind on it |
+
+**The measurement behind (b).** Over every `.mc` fixture in `tests/c_emit`,
+`tests/spec`, `tests/std`, `tests/exec`, `tests/mir` and `tests/mir_verify`:
+
+| | Count |
+|---|---|
+| functions built | 3,596 |
+| functions `typedObligationsRepresented` admits | 2,586 (72%) |
+| functions it does not | **1,010 (28%)** -- 547 incomplete bodies, 245 `extern` declarations, 218 empty bodies |
+| instructions in all functions | 57,156 |
+| instructions in the 1,010 | 10,075 |
+| instruction-scoped facts whose only representation is those instructions | **5,555** |
+
+So (b) is not a rounding error: more than a quarter of all functions, and 5,555
+facts, have the stream as their *sole* representation today. Deleting it
+without first representing those three body shapes does not move those checks
+-- it removes them, and a malformed fact table in an `extern` declaration or a
+half-built body would be admitted where it is refused now.
+
+**Why no (c) was rewritten here.** Each of the five is a design change rather
+than a mechanical move, and three of them change what the compiler *reports*:
+
+- the representation-dominance dataflow needs a typed dominance relation that
+  `ExecutableBody` does not have;
+- the irq-context walk needs to reach indirect calls, which carry no
+  `SymbolId`;
+- contract regions are line ranges over instructions, and the typed body has
+  no region concept;
+- the cleanup CFG's action identity is a stream index that both backends
+  already consume, and it must keep answering for incomplete bodies;
+- the source map's provenance label and the MIR facts digest are *of* the
+  stream, so rewriting them is choosing a new artifact, not preserving one --
+  measurably: removing one `result_check` instruction already moved 9 of 163
+  `.mcmap` provenance labels and their two digests, with no mapping changed.
+
+The next bounded step is not any of these: it is making the typed body
+represent an `extern` declaration and an empty body, which are 463 of the
+1,010 and need no expression graph at all. That shrinks (b) to the 547
+incomplete bodies, which is the only shape where "the builder stopped partway"
+is the whole content.
 
 ### Note: the `Instruction.detail` readers that are left
 
