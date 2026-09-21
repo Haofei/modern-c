@@ -7226,7 +7226,7 @@ pub const FunctionBuilder = struct {
             else => if (call.vararg_cursor.isValid() or call.dma_buffer.isValid()) return false,
         }
         if (call.kind == .enum_raw and !self.executableEnumRawComplete(expression, call)) return false;
-        return if (call.kind == .raw_ptr)
+        return if (mir_model.executableBuiltinOwnsRepresentationCheck(call.kind, expression.result_ty))
             call.representation_span_id.eql(expression.span_id)
         else
             !call.representation_span_id.isValid();
@@ -7482,7 +7482,7 @@ pub const FunctionBuilder = struct {
                         self.executableAtomicRepresentationPlaceCandidate(update.place),
                     .address_of => |address| address.representation_span_id.eql(legacy.typed_span_id) and
                         self.executableRepresentationPlaceCandidate(address.place, false),
-                    .builtin_call => |call| call.kind == .raw_ptr and
+                    .builtin_call => |call| mir_model.executableBuiltinOwnsRepresentationCheck(call.kind, expression.result_ty) and
                         call.representation_span_id.eql(legacy.typed_span_id),
                     .dyn_call => |call| call.representation_span_id.eql(legacy.typed_span_id) and
                         self.executableRepresentationPlaceCandidate(call.receiver, false),
@@ -7583,7 +7583,10 @@ pub const FunctionBuilder = struct {
                         const projection = self.executableIndexedProjectionForSpan(place, legacy.typed_span_id) orelse return false;
                         break :bounds projection.span_id;
                     } else address.representation_span_id,
-                    .builtin_call => |call| if (call.kind == .raw_ptr) call.representation_span_id else owner.span_id,
+                    .builtin_call => |call| if (mir_model.executableBuiltinOwnsRepresentationCheck(call.kind, owner.result_ty))
+                        call.representation_span_id
+                    else
+                        owner.span_id,
                     .dyn_call => |call| call.representation_span_id,
                     else => owner.span_id,
                 };
@@ -9112,7 +9115,10 @@ pub const FunctionBuilder = struct {
                         .kind = kind,
                         .unsafe_authorized = mir_model.executableBuiltinRequiresUnsafe(kind) and self.active_unsafe,
                         .callee_span_id = try self.internSpanId(self.sourcePoint(node.callee.*.span)),
-                        .representation_span_id = if (kind == .raw_ptr) try self.internSpanId(source) else .invalid,
+                        .representation_span_id = if (mir_model.executableBuiltinOwnsRepresentationCheck(kind, result_ty))
+                            try self.internSpanId(source)
+                        else
+                            .invalid,
                         .const_index = if (const_get_target) |target| target.index else null,
                         .vararg_cursor = vararg_cursor,
                         .dma_buffer = dma_buffer,
@@ -16328,7 +16334,8 @@ pub const FunctionBuilder = struct {
             }
             if (expression.operation == .builtin_call) {
                 const call = expression.operation.builtin_call;
-                if (call.kind != .raw_ptr or !call.representation_span_id.eql(span_id)) continue;
+                if (!mir_model.executableBuiltinOwnsRepresentationCheck(call.kind, expression.result_ty) or
+                    !call.representation_span_id.eql(span_id)) continue;
                 const legacy = self.trap_edges.items[self.trap_edges.items.len - 1];
                 if (legacy.kind != .InvalidRepresentation or legacy.source != .representation_check or
                     !legacy.from_block.eql(BlockId.fromIndex(self.current)) or !legacy.typed_span_id.eql(span_id)) return;

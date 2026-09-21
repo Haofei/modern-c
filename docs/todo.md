@@ -145,12 +145,11 @@ pointers.
 
 ### Note: the sweep gaps that are left
 
-Nine `E_BACKEND_UNSUPPORTED` entries remain in
-`backend-expected-failures.json`, in six families. Largest first:
+Seven `E_BACKEND_UNSUPPORTED` entries remain in
+`backend-expected-failures.json`, in five families. Largest first:
 
 | Family | Fixtures | What it is |
 |---|---|---|
-| `builtin_call` result not accepted | `cast_class_strip.mc`, `serial_counter_ops.mc` | `executableExpressionComplete` rejects a `builtin_call` whose result is a pointer (`bitcast<*u8>`) or a `domain_integer` (`Ticks.elapsed_assume_within`). |
 | `incoherent_cleanup_action` | `try_propagation.mc`, `move_borrow_escape.mc` | Not a cleanup-action problem despite the name: both reach it through `executableTrapProjectionComplete`, where a legacy trap edge has no executable counterpart. For `accept_result_pointer_try` it is the `Result<*mut u8, E>` unwrap, whose pointer payload adds a representation edge the try-propagation projection does not enumerate. |
 | `incoherent_expression` (slices of pointers) | `data_race_semantics.mc` | `index` / `range_slice` over a slice whose element type is a pointer. |
 | `unsupported_call` | `comptime_params.mc` | |
@@ -159,6 +158,25 @@ Nine `E_BACKEND_UNSUPPORTED` entries remain in
 | `incoherent_executable_shape` | `type_arg_and_trivial_drop_reject.mc` | |
 
 The five `E_EXPERIMENTAL_DYN_CODEGEN` entries are policy and stay.
+
+Closed: **`builtin_call` result not accepted** (`cast_class_strip.mc`,
+`serial_counter_ops.mc`). Two independent gaps hid behind one reason.
+`Ticks.elapsed_assume_within` was simply missing from
+`executableBuiltinTypesValid` and from both renderers' admitted-kind lists; it
+is the same modular delta `delta_mod` emits, read as a `Duration<T>`, and its
+asserted bound is an operand both renderers now evaluate exactly once and
+otherwise ignore (spec 5.5 makes it a proof obligation, not an optimizer
+contract). `bitcast<*u8>(p)` needed two changes: the reinterpretation rule
+widened from "same-width scalars" to also admit a thin pointer reinterpreted as
+another thin pointer of the same nullability
+(`mir_model.executableBitcastReinterprets`, which both backends now defer to),
+and the *representation* obligation on the result. A bitcast to a single
+pointer mints a non-null pointer out of an arbitrary bit pattern, exactly as
+`raw.ptr` mints one out of an address, so it owns its guard on the call node
+through `representation_span_id` rather than being wrapped in a second
+`representation_check`. `mir_model.executableBuiltinOwnsRepresentationCheck`
+is that rule, and it replaced the five open-coded `kind == .raw_ptr` tests in
+the builder, the executable-body verifier and both backends.
 
 Not on the list: removing traits, closures, generics, or the advanced ownership
 forms. All were measured and none is a bounded cut. They stay frozen.

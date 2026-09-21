@@ -5,12 +5,6 @@
   "emit_c": [],
   "sweep": [
     {
-      "fixture": "cast_class_strip.mc",
-      "stage": "EMIT",
-      "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_expression` in `accept_pointer_to_pointer` (declined by mir-build). Construct: `bitcast<*u8>(p)` -- a `builtin_call` expression with a pointer result that `executableExpressionComplete` does not accept."
-    },
-    {
       "fixture": "comptime_params.mc",
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
@@ -39,12 +33,6 @@
       "stage": "EMIT",
       "reason": "E_BACKEND_UNSUPPORTED",
       "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_cleanup_action` in `accept_dynamic_multi_array_elem_assign_before_move` (declined by mir-build)."
-    },
-    {
-      "fixture": "serial_counter_ops.mc",
-      "stage": "EMIT",
-      "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_expression` in `tick_elapsed` (declined by mir-build). Construct: `Ticks.elapsed_assume_within(...)` -- a `builtin_call` expression with a `domain_integer` result that `executableExpressionComplete` does not accept."
     },
     {
       "fixture": "traits_dyn_accept.mc",

@@ -803,24 +803,21 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
             else => false,
         },
         .counter_elapsed_bounded => counter_bounded: {
-            if (operands.len != 3 or !ValueType.eql(operands[0], operands[1])) break :counter_bounded false;
-            const counter = switch (operands[0]) {
-                .domain_integer => |shape| shape,
-                else => break :counter_bounded false,
-            };
-            const duration = switch (operands[2]) {
-                .domain_integer => |shape| shape,
-                else => break :counter_bounded false,
-            };
-            const storage = ExecutableCastKind.integerInfo(.{ .integer = counter.child }) orelse break :counter_bounded false;
-            if (counter.kind != .counter or duration.kind != .duration or
-                !std.mem.eql(u8, counter.child, duration.child) or storage.signed or storage.bits > 64)
-                break :counter_bounded false;
+            const domain = executableCounterIntervalDomain(operands) orelse break :counter_bounded false;
             break :counter_bounded switch (result) {
-                .result => |shape| durationTypeSpellingMatches(shape.ok, duration.child) and
+                .result => |shape| durationTypeSpellingMatches(shape.ok, domain.child) and
                     std.mem.eql(u8, shape.err, "AmbiguousCounterInterval"),
                 else => false,
             };
+        },
+        // `elapsed_assume_within` is the same modular delta as `delta_mod`, read
+        // as a `Duration<T>` on the caller's external temporal invariant. The
+        // bound is a proof obligation the language deliberately does not check
+        // (spec 5.5), so it constrains the operand types and nothing else; it is
+        // still an operand, and both renderers evaluate it exactly once.
+        .counter_elapsed_assume_within => counter_assume: {
+            const domain = executableCounterIntervalDomain(operands) orelse break :counter_assume false;
+            break :counter_assume ValueType.eql(result, .{ .domain_integer = .{ .kind = .duration, .child = domain.child } });
         },
         // The exact nominal enum/repr TypeId relationship is checked by the
         // executable-body verifier and each renderer against `enum_types`.
@@ -841,13 +838,7 @@ pub fn executableBuiltinTypesValid(kind: CallTargetKind, result: ValueType, oper
         .conversion_trap_from => operands.len == 1 and executableTrapConversion(operands[0], result) != null,
         .conversion_wrap_from, .conversion_from_mod => operands.len == 1 and executableIntegerConversion(operands[0], result) != null,
         .conversion_sat_from => operands.len == 1 and executableIntegerConversion(operands[0], result) != null,
-        // `bitcast` preserves the complete scalar bit pattern; it is neither a
-        // numeric conversion nor a backend-selected coercion.  Keep this
-        // first executable slice deliberately bounded to scalar integer/float
-        // values of identical width.  Aggregate bitcasts need canonical layout
-        // facts before they can cross the syntax-free boundary.
-        .bitcast => operands.len == 1 and executableScalarBitWidth(operands[0]) != null and
-            executableScalarBitWidth(operands[0]) == executableScalarBitWidth(result),
+        .bitcast => operands.len == 1 and executableBitcastReinterprets(operands[0], result),
         .raw_many_offset => raw_many: {
             if (operands.len != 2 or !ValueType.eql(result, operands[0]))
                 break :raw_many false;
@@ -949,6 +940,27 @@ fn durationTypeSpellingMatches(spelling: []const u8, child: []const u8) bool {
         std.mem.eql(u8, spelling[prefix.len .. spelling.len - 1], child);
 }
 
+/// The builtins that *mint* a non-null pointer rather than pass one through,
+/// and therefore own the target's representation obligation on the call node
+/// itself -- the way a load owns it through `representation_span_id` -- instead
+/// of wrapping their result in a separate `representation_check`.
+///
+/// `raw.ptr` mints one from an address. A `bitcast` to a single pointer mints
+/// one from an arbitrary bit pattern. Every other builtin that yields a pointer
+/// is an identity or projection over a value whose obligation was already
+/// discharged where that value was produced, so a second guard there would
+/// check the same pointer twice against one legacy `representation_check`.
+pub fn executableBuiltinOwnsRepresentationCheck(kind: CallTargetKind, result: ValueType) bool {
+    return switch (kind) {
+        .raw_ptr => true,
+        .bitcast => switch (result) {
+            .pointer => |shape| shape.kind == .single,
+            else => false,
+        },
+        else => false,
+    };
+}
+
 /// The builtins the language admits only inside an `unsafe` region. This must
 /// agree with the checker: the executable-body verifier requires the call's
 /// authorization flag to equal this exactly, in both directions.
@@ -979,6 +991,59 @@ fn executableScalarBitWidth(ty: ValueType) ?u16 {
         .float => |name| if (std.mem.eql(u8, name, "f32")) 32 else if (std.mem.eql(u8, name, "f64")) 64 else null,
         else => null,
     };
+}
+
+/// A thin pointer: one machine address and nothing else. A slice pointer is
+/// fat -- address plus length -- so it is not a single object representation
+/// and never participates in a reinterpretation.
+fn executableThinPointer(ty: ValueType) ?PointerShape {
+    return switch (ty) {
+        .pointer, .nullable_pointer => |shape| if (shape.kind == .slice) null else shape,
+        else => null,
+    };
+}
+
+/// `bitcast` preserves the complete object representation; it is neither a
+/// numeric conversion nor a backend-selected coercion. Two shapes are
+/// admitted, and they deliberately do not mix:
+///
+///   * scalar integer/float values of identical width, and
+///   * a thin pointer reinterpreted as another thin pointer of the same
+///     nullability -- the ordinary `*A -> *B` kernel reinterpret, which both
+///     renderers realize without touching the address.
+///
+/// Crossing the scalar/pointer line is a provenance question rather than a
+/// width question, and changing nullability would launder a null-freedom proof
+/// past the representation check that owns it, so neither is admitted here.
+/// Aggregate bitcasts need canonical layout facts before they can cross the
+/// syntax-free boundary.
+pub fn executableBitcastReinterprets(source: ValueType, target: ValueType) bool {
+    if (executableScalarBitWidth(source)) |source_bits| {
+        const target_bits = executableScalarBitWidth(target) orelse return false;
+        return source_bits == target_bits;
+    }
+    if (executableThinPointer(source) == null or executableThinPointer(target) == null) return false;
+    return (source == .pointer) == (target == .pointer);
+}
+
+/// The operand shape every `counter<T>` interval builtin shares: two counter
+/// samples of one domain and a `Duration<T>` bound over the same storage. The
+/// storage must be an unsigned integer of at most 64 bits so the modular
+/// difference is the fully defined one both renderers emit.
+fn executableCounterIntervalDomain(operands: []const ValueType) ?DomainIntegerShape {
+    if (operands.len != 3 or !ValueType.eql(operands[0], operands[1])) return null;
+    const counter = switch (operands[0]) {
+        .domain_integer => |shape| shape,
+        else => return null,
+    };
+    const duration = switch (operands[2]) {
+        .domain_integer => |shape| shape,
+        else => return null,
+    };
+    const storage = ExecutableCastKind.integerInfo(.{ .integer = counter.child }) orelse return null;
+    if (counter.kind != .counter or duration.kind != .duration or
+        !std.mem.eql(u8, counter.child, duration.child) or storage.signed or storage.bits > 64) return null;
+    return counter;
 }
 
 fn unsignedIntegerAtLeast(ty: ValueType, minimum_bits: u16) bool {

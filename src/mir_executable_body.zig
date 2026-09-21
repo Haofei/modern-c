@@ -746,7 +746,7 @@ fn verifyExpression(function: *const mir.Function, value: mir.ExecutableExpressi
                 } else if (call.const_index != null) {
                     return error.InvalidBuiltinCall;
                 }
-                if (call.kind == .raw_ptr) {
+                if (mir.executableBuiltinOwnsRepresentationCheck(call.kind, value.result_ty)) {
                     try verifySpanId(function, call.representation_span_id);
                     if (!call.representation_span_id.eql(value.span_id))
                         return error.InvalidMemoryAccessTrap;
@@ -1143,7 +1143,7 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                             edge.source != .representation_check) return error.InvalidTrapEdge;
                     },
                     .builtin_call => |call| {
-                        if (call.kind == .raw_ptr) {
+                        if (mir.executableBuiltinOwnsRepresentationCheck(call.kind, owner.result_ty)) {
                             if (!call.representation_span_id.isValid() or
                                 edge.kind != .InvalidRepresentation or edge.source != .representation_check)
                                 return error.InvalidTrapEdge;
@@ -1204,7 +1204,10 @@ fn verifyTrapEdges(function: *const mir.Function) !void {
                         const projection = indexedProjectionForSpan(body, target.*, edge.span_id) orelse return error.InvalidTrapEdge;
                         break :bounds projection.span_id;
                     } else address.representation_span_id,
-                    .builtin_call => |call| if (call.kind == .raw_ptr) call.representation_span_id else owner.span_id,
+                    .builtin_call => |call| if (mir.executableBuiltinOwnsRepresentationCheck(call.kind, owner.result_ty))
+                        call.representation_span_id
+                    else
+                        owner.span_id,
                     .dyn_call => |call| call.representation_span_id,
                     else => owner.span_id,
                 };

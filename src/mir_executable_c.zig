@@ -2801,7 +2801,7 @@ fn builtinCallSupported(
 ) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .dma_cache_clean, .dma_cache_invalidate, .dma_addr, .dma_as_slice, .const_get, .phys, .reduce_sum_checked, .reduce_sum_left, .reduce_sum_fast, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .assume_noalias, .forget_unchecked, .va_start, .va_arg, .va_end, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+        .dma_cache_clean, .dma_cache_invalidate, .dma_addr, .dma_as_slice, .const_get, .phys, .reduce_sum_checked, .reduce_sum_left, .reduce_sum_fast, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_assume_within, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .assume_noalias, .forget_unchecked, .va_start, .va_arg, .va_end, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -2837,7 +2837,7 @@ fn builtinCallSupported(
     if (call.kind == .conversion_try_from and !conversionTryResultSupported(body, expression)) return false;
     if (call.kind == .serial_compare and !serialCompareResultSupported(body, expression)) return false;
     if (call.kind == .counter_elapsed_bounded and !counterElapsedResultSupported(body, expression)) return false;
-    return if (call.kind == .raw_ptr)
+    return if (mir.executableBuiltinOwnsRepresentationCheck(call.kind, expression.result_ty))
         call.representation_span_id.isValid() and
             representationOperationHasExactTrapEdge(body, expression)
     else if (call.kind == .conversion_trap_from)
@@ -3187,6 +3187,23 @@ fn emitBuiltinCall(
             try out.appendSlice(allocator, ") - (");
             try emitExpression(allocator, out, body, call.arguments[1], depth + 1);
             try out.appendSlice(allocator, ")))");
+        },
+        .counter_elapsed_assume_within => {
+            // The same modular delta `delta_mod` emits, read as a duration.
+            // The asserted bound is a proof obligation the language does not
+            // check (spec 5.5), so it contributes no comparison -- but it is
+            // an operand, and dropping it would make the C evaluate one
+            // expression fewer than the LLVM lowering does. The `(void)` cast
+            // keeps that evaluation and keeps `-Wunused-value` quiet.
+            try out.appendSlice(allocator, "((");
+            try appendCType(allocator, out, body, result_ty);
+            try out.appendSlice(allocator, ")(((void)(");
+            try emitExpression(allocator, out, body, call.arguments[2], depth + 1);
+            try out.appendSlice(allocator, ")), ((");
+            try emitExpression(allocator, out, body, call.arguments[0], depth + 1);
+            try out.appendSlice(allocator, ") - (");
+            try emitExpression(allocator, out, body, call.arguments[1], depth + 1);
+            try out.appendSlice(allocator, "))))");
         },
         .bitcast => {
             // `__builtin_bit_cast` copies the object representation. A C
@@ -4368,7 +4385,7 @@ fn representationOperationHasExactTrapEdge(body: *const mir.ExecutableBody, expr
             break :blk .{ .span_id = address.representation_span_id };
         },
         .builtin_call => |call| blk: {
-            if (call.kind != .raw_ptr) return false;
+            if (!mir.executableBuiltinOwnsRepresentationCheck(call.kind, expression.result_ty)) return false;
             break :blk .{ .span_id = call.representation_span_id };
         },
         .dyn_call => |call| blk: {
@@ -4917,7 +4934,8 @@ const ResultRepresentationGuard = struct {
 
 fn resultRepresentationGuard(expression: mir.ExecutableExpression) ?ResultRepresentationGuard {
     return switch (expression.operation) {
-        .builtin_call => |call| if (call.kind == .raw_ptr and call.representation_span_id.isValid())
+        .builtin_call => |call| if (mir.executableBuiltinOwnsRepresentationCheck(call.kind, expression.result_ty) and
+            call.representation_span_id.isValid())
             .{ .span_id = expression.span_id, .kind = .nonnull_pointer }
         else
             null,

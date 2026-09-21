@@ -2611,7 +2611,11 @@ const Renderer = struct {
                 try self.output.print(self.allocator, "  {s} = icmp {s} {s} {s}, 0\n", .{ result, if (call.kind == .serial_before) "slt" else "sgt", left.ty, difference });
                 return .{ .ty = "i1", .spelling = result };
             },
-            .serial_distance, .counter_delta_mod => {
+            // `elapsed_assume_within` is `delta_mod` read as a duration. Its
+            // third operand is the caller's asserted bound: already emitted
+            // into `operands[2]`, and deliberately not an optimizer contract,
+            // so it constrains nothing the lowering may assume (spec 5.5).
+            .serial_distance, .counter_delta_mod, .counter_elapsed_assume_within => {
                 const left = operands[0];
                 const right = operands[1];
                 if (!std.mem.eql(u8, left.ty, result_ty) or !std.mem.eql(u8, right.ty, result_ty)) return error.InvalidBody;
@@ -2628,11 +2632,21 @@ const Renderer = struct {
             .bitcast => {
                 const operand = operands[0];
                 const source_ty = self.body.expressions[call.arguments[0].index()].result_ty;
-                if (!pureScalarBitcastTypesSupported(source_ty, expression.result_ty)) return error.InvalidBody;
-                if (std.mem.eql(u8, operand.ty, result_ty)) return .{ .ty = result_ty, .spelling = operand.spelling };
-                const result = try self.temp();
-                try self.output.print(self.allocator, "  {s} = bitcast {s} {s} to {s}\n", .{ result, operand.ty, operand.spelling, result_ty });
-                return .{ .ty = result_ty, .spelling = result };
+                if (!bitcastTypesSupported(source_ty, expression.result_ty)) return error.InvalidBody;
+                // Under opaque pointers a thin-pointer reinterpretation is the
+                // operand itself, so the two admitted shapes collapse into one
+                // equality test rather than a pointer special case.
+                const value = if (std.mem.eql(u8, operand.ty, result_ty)) operand.spelling else reinterpreted: {
+                    const result = try self.temp();
+                    try self.output.print(self.allocator, "  {s} = bitcast {s} {s} to {s}\n", .{ result, operand.ty, operand.spelling, result_ty });
+                    break :reinterpreted result;
+                };
+                if (mir.executableBuiltinOwnsRepresentationCheck(call.kind, expression.result_ty)) {
+                    const edge = representationTrapEdge(self.body, expression) orelse return error.InvalidBody;
+                    const continuation = try std.fmt.allocPrint(self.allocator, "mc_bitcast_ready_{d}", .{expression.id.raw});
+                    try self.emitPointerRepresentationGuard(value, edge, continuation);
+                }
+                return .{ .ty = result_ty, .spelling = value };
             },
             .raw_many_offset => {
                 const pointer_shape = switch (expression.result_ty) {
@@ -5272,7 +5286,7 @@ fn projectionRootIsDirectCall(body: *const mir.ExecutableBody, start: mir.ExprId
 fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
     if (mir.executableBuiltinRequiresUnsafe(call.kind) != call.unsafe_authorized) return false;
     switch (call.kind) {
-        .dma_cache_clean, .dma_cache_invalidate, .dma_addr, .dma_as_slice, .const_get, .phys, .reduce_sum_checked, .reduce_sum_left, .reduce_sum_fast, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .assume_noalias, .forget_unchecked, .va_start, .va_arg, .va_end, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+        .dma_cache_clean, .dma_cache_invalidate, .dma_addr, .dma_as_slice, .const_get, .phys, .reduce_sum_checked, .reduce_sum_left, .reduce_sum_fast, .wrapping_add, .wrap_residue, .serial_before, .serial_after, .serial_distance, .serial_compare, .counter_delta_mod, .counter_elapsed_assume_within, .counter_elapsed_bounded, .enum_raw, .conversion_from, .conversion_try_from, .conversion_trap_from, .conversion_wrap_from, .conversion_sat_from, .conversion_from_mod, .bitcast, .raw_many_offset, .raw_load, .raw_ptr, .raw_store, .byte_view_as_bytes, .byte_view_equal, .declassify, .assume_noalias, .forget_unchecked, .va_start, .va_arg, .va_end, .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
         else => return false,
     }
     if (call.argument_count > mir.max_executable_operands) return false;
@@ -5304,7 +5318,7 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
     if (call.kind == .conversion_try_from and !conversionTryResultSupported(body, expression)) return false;
     if (call.kind == .serial_compare and !serialCompareResultSupported(body, expression)) return false;
     if (call.kind == .counter_elapsed_bounded and !counterElapsedResultSupported(body, expression)) return false;
-    if (call.kind == .raw_ptr) {
+    if (mir.executableBuiltinOwnsRepresentationCheck(call.kind, expression.result_ty)) {
         if (!call.representation_span_id.isValid() or
             !representationTrapEdgeIsExact(body, expression)) return false;
     } else if (call.kind == .conversion_trap_from) {
@@ -5313,7 +5327,7 @@ fn builtinSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableE
     } else if (call.representation_span_id.isValid() or
         ownedExpressionTrapCount(body, expression.id) != 0) return false;
     return call.kind != .bitcast or
-        (call.argument_count == 1 and pureScalarBitcastTypesSupported(operand_types[0], expression.result_ty));
+        (call.argument_count == 1 and bitcastTypesSupported(operand_types[0], expression.result_ty));
 }
 
 fn reduceCheckedResultSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, call: anytype) bool {
@@ -5375,18 +5389,13 @@ fn rawManyElementValueType(body: *const mir.ExecutableBody, name: []const u8) ?m
     return if (aggregateTypeForValueType(body, aggregate) != null) aggregate else null;
 }
 
-fn pureScalarBitcastTypesSupported(source: mir.ValueType, target: mir.ValueType) bool {
-    const source_bits = pureScalarBitWidth(source) orelse return false;
-    const target_bits = pureScalarBitWidth(target) orelse return false;
-    return source_bits == target_bits and scalarLlvmType(source) != null and scalarLlvmType(target) != null;
-}
-
-fn pureScalarBitWidth(ty: mir.ValueType) ?u16 {
-    if (mir.ExecutableCastKind.integerInfo(ty)) |info| return info.bits;
-    return switch (ty) {
-        .float => |name| if (std.mem.eql(u8, name, "f32")) 32 else if (std.mem.eql(u8, name, "f64")) 64 else null,
-        else => null,
-    };
+/// The reinterpretation rule is `mir_model`'s; this only adds what LLVM needs
+/// to render it, namely that both sides have a first-class scalar type. A
+/// thin-pointer pair renders as `ptr` on both sides, so under opaque pointers
+/// the reinterpretation is the operand itself.
+fn bitcastTypesSupported(source: mir.ValueType, target: mir.ValueType) bool {
+    return mir.executableBitcastReinterprets(source, target) and
+        scalarLlvmType(source) != null and scalarLlvmType(target) != null;
 }
 
 fn castSupported(body: *const mir.ExecutableBody, expression: mir.ExecutableExpression, cast: anytype) bool {
