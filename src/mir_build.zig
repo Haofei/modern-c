@@ -10406,7 +10406,12 @@ pub const FunctionBuilder = struct {
                 else => self.executablePlaceHasDeref(node.base.*),
             },
             .index => |node| self.executablePlaceHasDeref(node.base.*),
-            .deref => true,
+            // `(&E).*` adds no indirection: it is `E`'s own storage, so the
+            // access class is whatever `E` alone would have had.
+            .deref => |inner| if (executablePlaceAddressOfOperand(inner.*)) |operand|
+                self.executablePlaceHasDeref(operand)
+            else
+                true,
             else => false,
         };
     }
@@ -10430,7 +10435,9 @@ pub const FunctionBuilder = struct {
             .grouped => |inner| executablePlaceRootIdent(inner.*),
             .member => |node| executablePlaceRootIdent(node.base.*),
             .index => |node| executablePlaceRootIdent(node.base.*),
-            .deref => |inner| executablePlaceRootIdent(inner.*),
+            .deref => |inner| executablePlaceRootIdent(
+                executablePlaceAddressOfOperand(inner.*) orelse inner.*,
+            ),
             else => null,
         };
     }
@@ -11207,6 +11214,13 @@ pub const FunctionBuilder = struct {
                 break :projection true;
             },
             .deref => |inner| projection: {
+                // `(&x).*` is `x`. The address is taken and immediately given
+                // back, so the pair names the operand's own storage and adds
+                // no indirection: rooting the place there is both the correct
+                // answer and the only one, since an `address_of` is a value
+                // and has no storage of its own to root at.
+                if (executablePlaceAddressOfOperand(inner.*)) |operand|
+                    break :projection try self.fillExecutablePlace(place, operand);
                 // A dereferenced call result has no named storage to root at.
                 // Rooting the place at the call *value* would be wrong: a
                 // guarded deref spells its place more than once, so the call
@@ -11245,6 +11259,18 @@ pub const FunctionBuilder = struct {
         const callee = directCalleeName(call.callee.*) orelse return false;
         const summary = self.summaries.get(callee) orelse return false;
         return summary.return_ty == .never;
+    }
+
+    /// The operand of an `address_of` under a dereference, when the
+    /// dereferenced value is an address that was just taken. `&` does not
+    /// admit a non-place operand, so the operand always names storage.
+    fn executablePlaceAddressOfOperand(input: ast.Expr) ?ast.Expr {
+        var expr = input;
+        while (expr.kind == .grouped) expr = expr.kind.grouped.*;
+        return switch (expr.kind) {
+            .address_of => |operand| operand.*,
+            else => null,
+        };
     }
 
     /// The call expression under a dereference, when the dereferenced value
@@ -18978,7 +19004,16 @@ pub const FunctionBuilder = struct {
                 // type is the trait's, which the verifier does not carry. Resolve to `null`
                 // (unknown) rather than a same-named free function's summary return type.
                 (if (self.isDynDispatchMember(node.callee.*)) null else self.directCallReturnTypeExpr(expr.span, self.calleeName(node.callee.*))),
-            .deref => |inner| self.fromTable(expr.span, if (self.typeExprForExpr(inner.*)) |base_ty| storageElementTypeAlias(base_ty, self.aliases) else null),
+            // `(&E).*` is `E`, so its type is `E`'s. Asking for the pointee of
+            // `&E` instead would need a type for the address-of, which neither
+            // side of the handoff computes; folding the pair is both shorter
+            // and the same answer.
+            .deref => |inner| self.fromTable(expr.span, if (executablePlaceAddressOfOperand(inner.*)) |operand|
+                self.typeExprForExpr(operand)
+            else if (self.typeExprForExpr(inner.*)) |base_ty|
+                storageElementTypeAlias(base_ty, self.aliases)
+            else
+                null),
             .index => |node| self.fromTable(expr.span, if (self.typeExprForExpr(node.base.*)) |base_ty| storageElementTypeAlias(base_ty, self.aliases) else null),
             .slice => |node| self.fromTable(expr.span, if (self.typeExprForExpr(node.base.*)) |base_ty| sliceTypeForBaseAlias(base_ty, node.base.*.span, self.aliases) else null),
             .grouped => |inner| self.fromTable(expr.span, self.typeExprForExpr(inner.*)),
