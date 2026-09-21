@@ -736,6 +736,10 @@ fn appendFindingRows(allocator: std.mem.Allocator, function: Function, out: *std
                 "mir verify fn={s} pass=core finding={s} line={} column={}\n",
                 .{ function.name, @tagName(domain), source.line, source.column },
             ),
+            // `ffi` and `usage` print no verification-fact row: neither had
+            // one when the finding was an instruction, and adding one now
+            // would be a new assertion, not a preserved one.
+            .ffi, .usage => {},
             .nullability => |nullability| try out.print(
                 allocator,
                 "mir verify fn={s} pass=nullability finding={s} line={} column={}\n",

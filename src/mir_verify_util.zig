@@ -235,19 +235,33 @@ pub fn addressClassMismatchDiagnostic(target: mir_model.AddressClass, source: mi
     return "E_ADDRESS_CLASS_MISMATCH";
 }
 
-pub fn ffiFindingDiagnostic(finding: []const u8) []const u8 {
-    if (std.mem.eql(u8, finding, "c_void_deref")) return "E_C_VOID_DEREF";
-    return "E_C_VOID_NO_LAYOUT";
+/// The diagnostic a `c_void` FFI finding is reported as. The chain this
+/// replaced named only one of the two and returned the other as its
+/// fallback, so "no layout" and "unrecognised" were the same answer.
+pub fn ffiDiagnostic(finding: mir_model.FfiFinding) []const u8 {
+    return switch (finding) {
+        .c_void_deref => "E_C_VOID_DEREF",
+        .c_void_no_layout => "E_C_VOID_NO_LAYOUT",
+    };
 }
 
-pub fn usageFindingDiagnostic(finding: []const u8) []const u8 {
-    if (std.mem.eql(u8, finding, "atomic_operation")) return "E_ATOMIC_OPERATION";
-    if (std.mem.eql(u8, finding, "dma_operation")) return "E_DMA_OPERATION";
-    if (std.mem.eql(u8, finding, "atomic_ordering")) return "E_ATOMIC_ORDERING";
-    if (std.mem.eql(u8, finding, "mmio_ordering")) return "E_MMIO_ORDERING";
-    if (std.mem.eql(u8, finding, "closed_enum_conversion")) return "E_CLOSED_ENUM_CONVERSION_REQUIRES_VALIDATION";
-    if (std.mem.eql(u8, finding, "bitcast_type")) return "E_BITCAST_TYPE";
-    if (std.mem.eql(u8, finding, "dma_cache_mode")) return "E_DMA_CACHE_MODE";
-    if (std.mem.eql(u8, finding, "local_address_escape")) return "E_LOCAL_ADDRESS_ESCAPE";
-    return "E_OPERATOR_OPERAND";
+/// The diagnostic a typed-resource usage finding is reported as.
+///
+/// The `eql` chain this replaced ended in `E_OPERATOR_OPERAND`, a code from
+/// the operator family, and one of its arms -- `dma_operation` -- had no
+/// producer at all, so the mapping outlived its finding without anything
+/// saying so. `E_DMA_OPERATION` is kept as a member here because it is a real
+/// diagnostic code that sema still reports; what has gone is the pretence
+/// that the MIR builder can reach it.
+pub fn usageDiagnostic(finding: mir_model.UsageFinding) []const u8 {
+    return switch (finding) {
+        .atomic_operation => "E_ATOMIC_OPERATION",
+        .dma_operation => "E_DMA_OPERATION",
+        .atomic_ordering => "E_ATOMIC_ORDERING",
+        .mmio_ordering => "E_MMIO_ORDERING",
+        .closed_enum_conversion => "E_CLOSED_ENUM_CONVERSION_REQUIRES_VALIDATION",
+        .bitcast_type => "E_BITCAST_TYPE",
+        .dma_cache_mode => "E_DMA_CACHE_MODE",
+        .local_address_escape => "E_LOCAL_ADDRESS_ESCAPE",
+    };
 }

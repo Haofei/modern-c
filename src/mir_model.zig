@@ -5075,6 +5075,26 @@ pub const NullabilityFinding = enum {
     nullable_to_nonnull,
 };
 
+/// One `c_void` FFI refusal.
+pub const FfiFinding = enum {
+    c_void_deref,
+    c_void_no_layout,
+};
+
+/// One typed-resource usage refusal: an operation a typed resource (atomic,
+/// MMIO, DMA, a closed enum, a bitcast) does not define, or an argument it
+/// requires and did not get.
+pub const UsageFinding = enum {
+    atomic_operation,
+    dma_operation,
+    atomic_ordering,
+    mmio_ordering,
+    closed_enum_conversion,
+    bitcast_type,
+    dma_cache_mode,
+    local_address_escape,
+};
+
 /// What a refusal *is*, as a value rather than as a string.
 ///
 /// One arm per finding family. A family whose diagnostic needs more than the
@@ -5089,6 +5109,8 @@ pub const FindingKind = union(enum) {
     aggregate: AggregateFindingPayload,
     conversion: ConversionFindingPayload,
     nullability: NullabilityFinding,
+    ffi: FfiFinding,
+    usage: UsageFinding,
 };
 
 /// A refusal the MIR builder recorded while lowering a body.

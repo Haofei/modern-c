@@ -62,7 +62,7 @@ const buildFromDecls = mir_facade.buildFromDecls;
 const buildOptFromDecls = mir_facade.buildOptFromDecls;
 const checkedIntBoundsByName = mir_type.checkedIntBoundsByName;
 const conversionDiagnostic = mir_verify_util.conversionDiagnostic;
-const ffiFindingDiagnostic = mir_verify_util.ffiFindingDiagnostic;
+const ffiDiagnostic = mir_verify_util.ffiDiagnostic;
 const functionFallsThrough = mir_facade.functionFallsThrough;
 const instructionMatchesSpanId = mir_cleanup_cfg.instructionMatchesSpanId;
 const instructionSourcePoint = mir_cleanup_cfg.instructionSourcePoint;
@@ -83,7 +83,7 @@ const sourcePointSpan = mir_cleanup_cfg.sourcePointSpan;
 const switchDiagnostic = mir_verify_util.switchDiagnostic;
 const targetOwnerSpelling = mir_cleanup_cfg.targetOwnerSpelling;
 const uncheckedAssumeHasMatchingContract = mir_facade.uncheckedAssumeHasMatchingContract;
-const usageFindingDiagnostic = mir_verify_util.usageFindingDiagnostic;
+const usageDiagnostic = mir_verify_util.usageDiagnostic;
 const useHasDominatingRepresentationCheck = mir_representation.useHasDominatingCheck;
 const validateDropGlueFactsForLowering = mir_cleanup_cfg.validateDropGlueFactsForLowering;
 const validateOwnershipEventsForLowering = mir_cleanup_cfg.validateOwnershipEventsForLowering;
@@ -172,20 +172,6 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                         .{},
                     );
                 }
-                if (instruction.kind == .ffi_check) {
-                    reporter.err(
-                        sourcePointSpan(source),
-                        "{s}: MIR verifier found illegal c_void FFI operation",
-                        .{ffiFindingDiagnostic(instruction.detail)},
-                    );
-                }
-                if (instruction.kind == .usage_check) {
-                    reporter.err(
-                        sourcePointSpan(source),
-                        "{s}: MIR verifier found invalid typed-resource operation",
-                        .{usageFindingDiagnostic(instruction.detail)},
-                    );
-                }
                 if (instruction.kind == .mmio_check) {
                     if (std.mem.eql(u8, instruction.detail, "direct_assign")) {
                         reporter.err(
@@ -251,6 +237,16 @@ fn reportFindings(function: Function, reporter: *diagnostics.Reporter) void {
                 sourcePointSpan(source),
                 "{s}: MIR verifier found invalid arithmetic-domain operation",
                 .{arithmeticDomainDiagnostic(domain)},
+            ),
+            .ffi => |ffi| reporter.err(
+                sourcePointSpan(source),
+                "{s}: MIR verifier found illegal c_void FFI operation",
+                .{ffiDiagnostic(ffi)},
+            ),
+            .usage => |usage| reporter.err(
+                sourcePointSpan(source),
+                "{s}: MIR verifier found invalid typed-resource operation",
+                .{usageDiagnostic(usage)},
             ),
             .nullability => |nullability| reporter.err(
                 sourcePointSpan(source),

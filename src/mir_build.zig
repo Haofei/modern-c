@@ -153,6 +153,7 @@ const TypeId = mir_model.TypeId;
 const TypeIdentity = mir_model.TypeIdentity;
 const TypeMutability = mir_model.TypeMutability;
 const TypeOwnershipFact = mir_model.TypeOwnershipFact;
+const UsageFinding = mir_model.UsageFinding;
 const TypeOwnershipKind = mir_model.TypeOwnershipKind;
 const TypeShape = mir_model.TypeShape;
 const UnionSummary = mir_summary.UnionSummary;
@@ -12014,7 +12015,7 @@ pub const FunctionBuilder = struct {
                 }
                 if (maybe) |expr| {
                     if (self.addressOriginIsLocal(expr)) {
-                        try self.addInstr(.usage_check, "local_address_escape", .unknown, expr.span);
+                        try self.addFinding(.{ .usage = .local_address_escape }, expr.span);
                     }
                     try self.addNullabilityConversionCheck(self.return_ty, expr, expr.span);
                     try self.addConversionCheck(self.return_ty, expr, .return_, expr.span);
@@ -13749,7 +13750,7 @@ pub const FunctionBuilder = struct {
                     try self.addInstr(.address_deref, inner_ty.name(), inner_ty, expr.span);
                 }
                 if (isMirCVoidPointer(inner_ty)) {
-                    try self.addInstr(.ffi_check, "c_void_deref", .unknown, expr.span);
+                    try self.addFinding(.{ .ffi = .c_void_deref }, expr.span);
                 }
                 const ty = self.exprType(expr);
                 if (!self.buildingAssignmentTargetValue() and representationCheckKind(ty) != null) {
@@ -13852,7 +13853,7 @@ pub const FunctionBuilder = struct {
                 try self.appendTargetTypeFact(.explicit_cast_source, cast_source_ty, valueTypeFromTypeAlias(cast_source_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                 try self.appendTargetTypeFact(.explicit_cast_target, node.ty.*, cast_target, expr.span);
                 if (cast_target == .closed_enum and isMirIntegerType(self.exprType(node.value.*))) {
-                    try self.addInstr(.usage_check, "closed_enum_conversion", .unknown, expr.span);
+                    try self.addFinding(.{ .usage = .closed_enum_conversion }, expr.span);
                 }
                 // A `[]mut T as []const T` (G12) or `*mut T as *const T` (G30) const-narrowing
                 // cast is a statically-safe reinterpret (the source pointer/slice is already a
@@ -14324,23 +14325,23 @@ pub const FunctionBuilder = struct {
                     try self.addFinding(.{ .arithmetic_domain = finding }, expr.span);
                 }
                 if (self.typedResourceCallFinding(node.callee.*)) |finding| {
-                    try self.addInstr(.usage_check, finding, .unknown, expr.span);
+                    try self.addFinding(.{ .usage = finding }, expr.span);
                 }
                 if (self.atomicOrderingFinding(node.callee.*, node.args)) |finding| {
-                    try self.addInstr(.usage_check, finding, .unknown, expr.span);
+                    try self.addFinding(.{ .usage = finding }, expr.span);
                 }
                 if (self.mmioOrderingFinding(node.callee.*, node.args)) |finding| {
-                    try self.addInstr(.usage_check, finding, .unknown, expr.span);
+                    try self.addFinding(.{ .usage = finding }, expr.span);
                 }
                 if (self.dmaCacheModeFinding(node.callee.*, node.args)) |finding| {
-                    try self.addInstr(.usage_check, finding, .unknown, node.args[0].span);
+                    try self.addFinding(.{ .usage = finding }, node.args[0].span);
                 }
                 if (isMirBitcastCallee(node.callee.*) and node.type_args.len == 1 and node.args.len == 1) {
                     if (!isMirBitcastLayout(valueTypeFromTypeAlias(node.type_args[0], self.enums, self.structs, self.packed_bits, self.aliases))) {
-                        try self.addInstr(.usage_check, "bitcast_type", .unknown, node.type_args[0].span);
+                        try self.addFinding(.{ .usage = .bitcast_type }, node.type_args[0].span);
                     }
                     if (!isMirBitcastLayout(self.exprType(node.args[0]))) {
-                        try self.addInstr(.usage_check, "bitcast_type", .unknown, node.args[0].span);
+                        try self.addFinding(.{ .usage = .bitcast_type }, node.args[0].span);
                     }
                 }
                 const conversion_trap = conversionDomainCallTrap(node.callee.*);
@@ -14523,7 +14524,7 @@ pub const FunctionBuilder = struct {
                     return;
                 }
                 if (isMirCVoidPointer(self.exprType(node.base.*))) {
-                    try self.addInstr(.ffi_check, "c_void_no_layout", .unknown, expr.span);
+                    try self.addFinding(.{ .ffi = .c_void_no_layout }, expr.span);
                 }
                 const ty = self.exprType(expr);
                 if (!self.buildingAssignmentTargetValue() and representationCheckKind(ty) != null) {
@@ -19331,12 +19332,12 @@ pub const FunctionBuilder = struct {
 
     // D-pass operation legality for typed-resource calls: unknown atomic method
     // on an atomic value, and `.raw()` on a closed enum.
-    fn typedResourceCallFinding(self: *FunctionBuilder, callee: ast.Expr) ?[]const u8 {
+    fn typedResourceCallFinding(self: *FunctionBuilder, callee: ast.Expr) ?UsageFinding {
         const member = memberExpr(callee) orelse return null;
         const m = member.name.text;
         if (self.typeExprForExpr(member.base.*)) |base_ty| {
             if (isAtomicTypeExprAlias(base_ty, self.aliases)) {
-                if (!std.mem.eql(u8, m, "load") and !std.mem.eql(u8, m, "store") and !std.mem.eql(u8, m, "fetch_add") and !std.mem.eql(u8, m, "fetch_sub")) return "atomic_operation";
+                if (!std.mem.eql(u8, m, "load") and !std.mem.eql(u8, m, "store") and !std.mem.eql(u8, m, "fetch_add") and !std.mem.eql(u8, m, "fetch_sub")) return .atomic_operation;
                 return null;
             }
         }
@@ -19348,41 +19349,41 @@ pub const FunctionBuilder = struct {
 
     // Validates the memory-ordering argument of an atomic load/store/RMW
     // (section 19): load forbids release, store forbids acquire.
-    fn atomicOrderingFinding(self: *FunctionBuilder, callee: ast.Expr, args: []ast.Expr) ?[]const u8 {
+    fn atomicOrderingFinding(self: *FunctionBuilder, callee: ast.Expr, args: []ast.Expr) ?UsageFinding {
         const name = self.atomicReceiverCalleeName(callee) orelse return null;
         const ordering_idx: usize = if (std.mem.eql(u8, name, "atomic.load")) 0 else 1;
         if (args.len <= ordering_idx) return null;
-        const ord = enumLiteralText(args[ordering_idx]) orelse return "atomic_ordering";
+        const ord = enumLiteralText(args[ordering_idx]) orelse return .atomic_ordering;
         const ok = if (std.mem.eql(u8, name, "atomic.load"))
             isMirAtomicLoadOrdering(ord)
         else if (std.mem.eql(u8, name, "atomic.store"))
             isMirAtomicStoreOrdering(ord)
         else
             isMirAtomicOrdering(ord);
-        return if (ok) null else "atomic_ordering";
+        return if (ok) null else .atomic_ordering;
     }
 
     // Validates the ordering argument of a typed MMIO read/write (section 17):
     // read allows .relaxed/.acquire, write allows .relaxed/.release.
-    fn mmioOrderingFinding(self: *FunctionBuilder, callee: ast.Expr, args: []ast.Expr) ?[]const u8 {
+    fn mmioOrderingFinding(self: *FunctionBuilder, callee: ast.Expr, args: []ast.Expr) ?UsageFinding {
         const info = self.mmioReceiverAccessInfo(callee) orelse return null;
         const idx: usize = if (info.op == .read) 0 else 1;
         if (args.len <= idx) return null;
-        const ord = enumLiteralText(args[idx]) orelse return "mmio_ordering";
+        const ord = enumLiteralText(args[idx]) orelse return .mmio_ordering;
         const ok = if (info.op == .read) isMirMmioReadOrdering(ord) else isMirMmioWriteOrdering(ord);
-        return if (ok) null else "mmio_ordering";
+        return if (ok) null else .mmio_ordering;
     }
 
     // cache.clean/invalidate are required only for noncoherent DmaBuf values
     // (section 18); calling them on a coherent buffer is rejected.
-    fn dmaCacheModeFinding(self: *FunctionBuilder, callee: ast.Expr, args: []ast.Expr) ?[]const u8 {
+    fn dmaCacheModeFinding(self: *FunctionBuilder, callee: ast.Expr, args: []ast.Expr) ?UsageFinding {
         const member = memberExpr(callee) orelse return null;
         if (!exprIsIdentNamed(member.base.*, "cache")) return null;
         if (!std.mem.eql(u8, member.name.text, "clean") and !std.mem.eql(u8, member.name.text, "invalidate")) return null;
         if (args.len == 0) return null;
         const buf_ty = self.typeExprForExpr(args[0]) orelse return null;
         const mode = dmaBufModeName(buf_ty, self.aliases) orelse return null;
-        if (!std.mem.eql(u8, mode, "noncoherent")) return "dma_cache_mode";
+        if (!std.mem.eql(u8, mode, "noncoherent")) return .dma_cache_mode;
         return null;
     }
 
