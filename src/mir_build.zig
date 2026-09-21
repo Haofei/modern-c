@@ -13081,28 +13081,28 @@ pub const FunctionBuilder = struct {
         switch (target.kind) {
             .ident => |ident| {
                 if (self.local_mutability.get(ident.text)) |mutable| {
-                    if (!mutable) try self.addInstr(.assignment_check, "assign_to_immutable_local", .unknown, target.span);
+                    if (!mutable) try self.addFinding(.{ .assignment = .assign_to_immutable_local }, target.span);
                 }
             },
             .deref => |inner| {
                 if (self.constStorageBase(inner.*)) {
-                    try self.addInstr(.assignment_check, "assign_through_const_view", .unknown, target.span);
+                    try self.addFinding(.{ .assignment = .assign_through_const_view }, target.span);
                 }
             },
             .index => |node| {
                 if (self.constStorageBase(node.base.*)) {
-                    try self.addInstr(.assignment_check, "assign_through_const_view", .unknown, target.span);
+                    try self.addFinding(.{ .assignment = .assign_through_const_view }, target.span);
                 }
                 if (self.immutableIndexedValueStorageBase(node.base.*)) {
-                    try self.addInstr(.assignment_check, "assign_to_immutable_local", .unknown, target.span);
+                    try self.addFinding(.{ .assignment = .assign_to_immutable_local }, target.span);
                 }
             },
             .member => |node| {
                 if (self.constStorageBase(node.base.*)) {
-                    try self.addInstr(.assignment_check, "assign_through_const_view", .unknown, target.span);
+                    try self.addFinding(.{ .assignment = .assign_through_const_view }, target.span);
                 }
                 if (self.immutableValueStorageBase(node.base.*)) {
-                    try self.addInstr(.assignment_check, "assign_to_immutable_local", .unknown, target.span);
+                    try self.addFinding(.{ .assignment = .assign_to_immutable_local }, target.span);
                 }
             },
             .grouped => |inner| try self.addAssignmentTargetCheck(inner.*),

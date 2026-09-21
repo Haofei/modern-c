@@ -57,7 +57,7 @@ const addressDerefDiagnostic = mir_verify_util.addressDerefDiagnostic;
 const aggregateDiagnostic = mir_verify_util.aggregateDiagnostic;
 const alignOverlayStorage = mir_facade.alignOverlayStorage;
 const arithmeticDomainDiagnostic = mir_verify_util.arithmeticDomainDiagnostic;
-const assignmentFindingDiagnostic = mir_verify_util.assignmentFindingDiagnostic;
+const assignmentDiagnostic = mir_verify_util.assignmentDiagnostic;
 const buildFromDecls = mir_facade.buildFromDecls;
 const buildOptFromDecls = mir_facade.buildOptFromDecls;
 const checkedIntBoundsByName = mir_type.checkedIntBoundsByName;
@@ -256,14 +256,6 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                         .{code},
                     );
                 }
-                if (instruction.kind == .assignment_check) {
-                    const code = assignmentFindingDiagnostic(instruction.detail);
-                    reporter.err(
-                        sourcePointSpan(source),
-                        "{s}: MIR verifier found invalid assignment target",
-                        .{code},
-                    );
-                }
                 if (irqContextCallFinding(mir, function, instruction)) |finding| {
                     const code = irqContextDiagnostic(finding);
                     reporter.err(
@@ -300,6 +292,11 @@ fn reportFindings(function: Function, reporter: *diagnostics.Reporter) void {
                 sourcePointSpan(source),
                 "{s}: MIR verifier found invalid arithmetic-domain operation",
                 .{arithmeticDomainDiagnostic(domain)},
+            ),
+            .assignment => |assignment| reporter.err(
+                sourcePointSpan(source),
+                "{s}: MIR verifier found invalid assignment target",
+                .{assignmentDiagnostic(assignment)},
             ),
         }
     }

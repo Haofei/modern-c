@@ -132,10 +132,17 @@ pub fn switchFindingDiagnostic(finding: []const u8) []const u8 {
     return "E_DUPLICATE_SWITCH_CASE";
 }
 
-pub fn assignmentFindingDiagnostic(finding: []const u8) []const u8 {
-    if (std.mem.eql(u8, finding, "assign_to_immutable_local")) return "E_ASSIGN_TO_IMMUTABLE_LOCAL";
-    if (std.mem.eql(u8, finding, "assign_through_const_view")) return "E_ASSIGN_THROUGH_CONST_VIEW";
-    return "E_INVALID_ASSIGNMENT_TARGET";
+/// The diagnostic an assignment-target finding is reported as.
+///
+/// The `eql` chain this replaced had a third answer, `E_INVALID_ASSIGNMENT_TARGET`,
+/// for a spelling neither branch matched. No builder site ever produced one,
+/// so the code was unreachable through this path; sema still reports it, which
+/// is where it belongs.
+pub fn assignmentDiagnostic(finding: mir_model.AssignmentFinding) []const u8 {
+    return switch (finding) {
+        .assign_to_immutable_local => "E_ASSIGN_TO_IMMUTABLE_LOCAL",
+        .assign_through_const_view => "E_ASSIGN_THROUGH_CONST_VIEW",
+    };
 }
 
 /// The diagnostic an arithmetic-domain finding is reported as. The `eql`

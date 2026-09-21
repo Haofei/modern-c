@@ -736,6 +736,11 @@ fn appendFindingRows(allocator: std.mem.Allocator, function: Function, out: *std
                 "mir verify fn={s} pass=core finding={s} line={} column={}\n",
                 .{ function.name, @tagName(domain), source.line, source.column },
             ),
+            .assignment => |assignment| try out.print(
+                allocator,
+                "mir verify fn={s} pass=core finding={s} line={} column={}\n",
+                .{ function.name, @tagName(assignment), source.line, source.column },
+            ),
         }
     }
 }
@@ -852,13 +857,6 @@ pub fn appendVerificationFactsFromMir(allocator: std.mem.Allocator, mir: Module,
                     );
                 }
                 if (instruction.kind == .switch_check) {
-                    try out.print(
-                        allocator,
-                        "mir verify fn={s} pass=core finding={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, source.line, source.column },
-                    );
-                }
-                if (instruction.kind == .assignment_check) {
                     try out.print(
                         allocator,
                         "mir verify fn={s} pass=core finding={s} line={} column={}\n",

@@ -4979,6 +4979,12 @@ pub const ArithmeticDomainFinding = enum {
     conversion_operation,
 };
 
+/// One invalid-assignment-target refusal.
+pub const AssignmentFinding = enum {
+    assign_to_immutable_local,
+    assign_through_const_view,
+};
+
 /// What a refusal *is*, as a value rather than as a string.
 ///
 /// One arm per finding family. A family whose diagnostic needs more than the
@@ -4987,6 +4993,7 @@ pub const ArithmeticDomainFinding = enum {
 pub const FindingKind = union(enum) {
     operator: OperatorFinding,
     arithmetic_domain: ArithmeticDomainFinding,
+    assignment: AssignmentFinding,
 };
 
 /// A refusal the MIR builder recorded while lowering a body.
