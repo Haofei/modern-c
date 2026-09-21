@@ -16692,6 +16692,10 @@ pub const FunctionBuilder = struct {
             .typed_inst_id = self.last_inst_id,
             .typed_span_id = try self.internSpanId(source),
         });
+        try self.recordExecutableLiteralConversion(span, .{
+            .id = self.last_inst_id,
+            .target_type_id = try self.internTypeId(target_ty),
+        });
     }
 
     fn addConversionCheck(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr, ctx: ConversionContext, span: ast.Span) !void {

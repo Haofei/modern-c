@@ -100,7 +100,7 @@ that the typed body does not represent as a node at all:
 | bounds | `cmp_bounds` | **Done.** Joins `index.bounds_obligation` / `range_slice.bounds_obligation` on the typed node; see below. |
 | const_get | `index` with `detail == "const_get"` | No. Also still a `detail` string test. |
 | integer literal | `integer_literal_conversion`, agreeing on `detail` (the literal spelling) | **Done.** Joins `ExecutableExpression.literal_conversion`; the spelling agreement is gone. |
-| float literal | `expr` with `detail == "float"` | No. |
+| float literal | `expr` with `detail == "float"` | **Done.** Shares `ExecutableExpression.literal_conversion` with the integer family. |
 | representation | `representation_check` / `representation_use`, agreeing on `kind` and `detail` | No. |
 | target-type | `target_type`, agreeing on `detail` (the `TargetTypeKind` tag) | No. |
 | call-target | `call_target` | No. |
@@ -197,6 +197,14 @@ Two mechanics worth recording:
   is dropped rather than restated. It was the string classification the typed
   body exists to replace, and the identity plus the target type is the whole
   content of the fact.
+
+The float family reuses the same field, because a literal is numeric one way
+or the other and never both. One thing had to be added for that: the two
+families must stay *separable*, or deleting every float fact is reported as
+`InvalidMirIntegerFacts` -- which is what happened first. The node says which
+family owns its obligation (`mir_model.executableLiteralConversionIsFloat`,
+reading the literal payload), so each completeness walk skips the other
+family's obligations and a missing float fact stays a float refusal.
 
 ### Note: `index` over a slice of pointers is not a `supportsType` gap
 

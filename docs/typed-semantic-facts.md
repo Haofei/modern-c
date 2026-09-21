@@ -77,7 +77,7 @@ Not yet typed — the honest list:
   |---|---|---|
   | bounds | `index.bounds_obligation`, `range_slice.bounds_obligation`, and the same field on an `index` place projection | the typed body |
   | integer literal | `ExecutableExpression.literal_conversion` (identity plus the target type) | the typed body |
-  | float literal | -- | the instruction stream |
+  | float literal | `ExecutableExpression.literal_conversion`, shared with the integer family | the typed body |
   | target-type | -- | the instruction stream |
   | call-target | -- | the instruction stream |
   | representation | -- | the instruction stream |

@@ -1331,8 +1331,10 @@ pub const ExecutableExpression = struct {
     /// kinds a complete body must realize, and `mir_verify` proves the join
     /// is a total, single-valued function on exactly those.
     inst_id: InstId = .invalid,
-    /// The integer-literal conversion obligation this node owns, or an
-    /// invalid one when this node is not a contextualized integer literal.
+    /// The literal-conversion obligation this node owns, or an invalid one
+    /// when this node is not a contextualized numeric literal. An
+    /// `IntegerFact` or a `FloatFact` names it; a literal is one or the
+    /// other, so one field serves both.
     ///
     /// It is a separate field from `inst_id` because the conversion is not
     /// the instruction this node realizes: the builder emits an
@@ -2538,7 +2540,7 @@ pub fn executableExpressionForInstruction(body: *const ExecutableBody, inst_id: 
     return null;
 }
 
-/// An integer-literal conversion obligation carried by a typed node: this
+/// A literal-conversion obligation carried by a typed node: this numeric
 /// literal is contextualized to `target_type_id`.
 ///
 /// The target type is part of the obligation rather than being recovered from
@@ -2558,10 +2560,21 @@ pub const ExecutableLiteralConversion = struct {
     }
 };
 
-/// How many typed nodes carry `id` as their integer-literal conversion
-/// obligation. The exactly-one invariant an `IntegerFact` must satisfy is
-/// stated over this count rather than over the `integer_literal_conversion`
-/// instruction it used to be counted against.
+/// Which literal family owns a conversion obligation. The node says it: a
+/// literal is numeric one way or the other, and the two fact families must
+/// stay separable so a missing float fact is not reported as a missing
+/// integer one.
+pub fn executableLiteralConversionIsFloat(expression: ExecutableExpression) bool {
+    return switch (expression.operation) {
+        .literal => |literal| literal == .float,
+        else => false,
+    };
+}
+
+/// How many typed nodes carry `id` as their literal-conversion obligation.
+/// The exactly-one invariant an `IntegerFact` or a `FloatFact` must satisfy
+/// is stated over this count rather than over the instruction it used to be
+/// counted against.
 pub fn executableLiteralConversionCount(body: *const ExecutableBody, id: InstId) usize {
     if (!id.isValid()) return 0;
     var count: usize = 0;

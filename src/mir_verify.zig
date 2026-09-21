@@ -706,6 +706,7 @@ pub fn validateIntegerFactsForLowering(module: Module) error{InvalidMirIntegerFa
                 // with `Instruction.typed_result_ty`.
                 const node = mir_model.executableLiteralConversionNode(body, fact.typed_inst_id) orelse
                     return error.InvalidMirIntegerFacts;
+                if (mir_model.executableLiteralConversionIsFloat(node)) return error.InvalidMirIntegerFacts;
                 if (!node.literal_conversion.target_type_id.eql(fact.target_type_id))
                     return error.InvalidMirIntegerFacts;
             } else if (countMatchingIntegerInstructions(function, fact) != 1) {
@@ -715,6 +716,9 @@ pub fn validateIntegerFactsForLowering(module: Module) error{InvalidMirIntegerFa
         if (typed) {
             for (body.expressions) |expression| {
                 if (!expression.literal_conversion.isValid()) continue;
+                // A literal is integer or float, never both. The node says
+                // which, so a missing float fact stays a float refusal.
+                if (mir_model.executableLiteralConversionIsFloat(expression)) continue;
                 if (countIntegerFactsForConversion(function, expression.literal_conversion.id) != 1)
                     return error.InvalidMirIntegerFacts;
             }
@@ -737,12 +741,40 @@ fn countIntegerFactsForConversion(function: Function, id: mir_model.InstId) usiz
     return count;
 }
 
+/// A float fact names the same typed obligation an integer fact does: the
+/// literal-conversion record on the typed literal node. A literal is numeric
+/// one way or the other, so the two families share the field and the
+/// exactly-one rule is stated the same way in both directions.
+///
+/// The `expr`-with-`detail == "float"` walk remains only for a body the typed
+/// form does not represent; see `typedObligationsRepresented`.
 pub fn validateFloatFactsForLowering(module: Module) error{InvalidMirFloatFacts}!void {
     for (module.functions) |function| {
+        const body = &function.executable_body;
+        const typed = typedObligationsRepresented(module, function);
         for (function.float_facts) |fact| {
             if (!floatFactTypedIdentitiesValid(function, fact)) return error.InvalidMirFloatFacts;
-            const instruction_count = countMatchingFloatInstructions(function, fact);
-            if (instruction_count != 1 or countMatchingFloatFacts(function, fact) != 1) return error.InvalidMirFloatFacts;
+            if (countMatchingFloatFacts(function, fact) != 1) return error.InvalidMirFloatFacts;
+            if (typed) {
+                if (mir_model.executableLiteralConversionCount(body, fact.typed_inst_id) != 1)
+                    return error.InvalidMirFloatFacts;
+                const node = mir_model.executableLiteralConversionNode(body, fact.typed_inst_id) orelse
+                    return error.InvalidMirFloatFacts;
+                if (!mir_model.executableLiteralConversionIsFloat(node)) return error.InvalidMirFloatFacts;
+                if (!node.literal_conversion.target_type_id.eql(fact.target_type_id))
+                    return error.InvalidMirFloatFacts;
+            } else if (countMatchingFloatInstructions(function, fact) != 1) {
+                return error.InvalidMirFloatFacts;
+            }
+        }
+        if (typed) {
+            for (body.expressions) |expression| {
+                if (!expression.literal_conversion.isValid()) continue;
+                if (!mir_model.executableLiteralConversionIsFloat(expression)) continue;
+                if (countFloatFactsForConversion(function, expression.literal_conversion.id) != 1)
+                    return error.InvalidMirFloatFacts;
+            }
+            continue;
         }
         for (function.blocks) |block| {
             for (block.instructions) |instruction| {
@@ -751,6 +783,14 @@ pub fn validateFloatFactsForLowering(module: Module) error{InvalidMirFloatFacts}
             }
         }
     }
+}
+
+fn countFloatFactsForConversion(function: Function, id: mir_model.InstId) usize {
+    var count: usize = 0;
+    for (function.float_facts) |fact| {
+        if (fact.typed_inst_id.eql(id)) count += 1;
+    }
+    return count;
 }
 
 /// No-overflow facts name their `unchecked_assume` instruction by identity.
