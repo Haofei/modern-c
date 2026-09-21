@@ -75,7 +75,7 @@ backends off syntax, is described in
 
 | Priority | Work | Why, and what it depends on |
 |---|---|---|
-| P0 | Collapse MIR to the single `ExecutableBody`: move the remaining consumers of the string `Instruction.detail` field off it (see the note below), **fold the instruction-scoped fact tables into typed nodes first**, then rewrite the legacy-stream checks in `mir_verify.zig` against the typed body, repoint `mir_dump.zig`, then delete `Function.blocks[].instructions`. | The core of the original design review. Two body representations cost every change twice. The fold now comes first: surveying all eleven verifier families showed none of them can move until the typed body represents the obligations the checking instructions carry -- see the note below. Depends on the golden-test conversion for affordability. |
+| P0 | Collapse MIR to the single `ExecutableBody`: the instruction-scoped fact tables are folded into typed obligations (ten of eleven families, see the note below); what is left is the access-fact family, the remaining consumers of the string `Instruction.detail` field, repointing `mir_dump.zig`, and then deleting `Function.blocks[].instructions`. | The core of the original design review. Two body representations cost every change twice. The fold had to come first, because surveying all eleven verifier families showed none could move until the typed body represented the obligations the checking instructions carry. Depends on the golden-test conversion for affordability. |
 | P0 | Replace the string-carrying `mir.ValueType` with type ids from the resolved table, then drop the parallel `typed_result_ty` mirrors. | Falls out once the table answers everything `ValueType.name()` is asked for. |
 | P0 | Finish the sema handoff: intrinsic call results where sema and builder share one rule, `address_of` / `borrow` / `~`, alias collapse once the emitters take spellings from the table, and deletion of the builder's own type maps once unit tests build MIR through a checker. | Each slice: record in sema, read in the builder under the agree-assertion, delete the builder copy. |
 | P1 | Give expressions a node identity that survives copying, or a per-instance span remap in monomorphization. | Unblocks monomorphizing after sema and stops instances failing closed in the resolved table. |
@@ -110,14 +110,33 @@ that the typed body does not represent as a node at all:
 | ownership events | none -- `verifyFunctionOwnershipEvents` does not walk the stream | Already off it. |
 | trap projection | none in `mir_verify` -- the typed body owns `trap_edges`, and a refusal is reported as `incoherent_trap_projection` from the executable-body side | Already off it. |
 
-So this step of the P0 is not a sequence of eleven independent rewrites. It is
-blocked behind one prior change: the typed body needs nodes (or recorded
-identities) for the obligations the checking instructions currently carry, and
-the fact tables need to name those instead of `cmp_bounds`, `target_type`,
-`call_target`, `representation_check` and friends. Folding the
-instruction-scoped fact tables into typed nodes -- the *next* P0 bullet -- is
-what unblocks this one, not the other way round. The two ordered bullets
-should be swapped.
+The survey's conclusion held: this step was never eleven independent rewrites
+but one prior change made ten times. Each family needed the typed body to
+*represent the obligation* its checking instruction carried, and then needed
+its fact table to name that instead of `cmp_bounds`, `target_type`,
+`call_target`, `representation_check` and friends. All ten are done. What the
+ten converged on, and where they differed:
+
+- **Eight carry the obligation as a field on the node that owns it.** Bounds,
+  the two literal families, call-target, range and `const_get` each found a
+  node; `const_get` needed no payload at all, because the index was already on
+  the node. Call-target needed one *new* node -- `ExecutableTerminator`, for a
+  diverging explicit trap, which is neither a statement nor an expression.
+- **Two needed a list on the body**, because one node owns several obligations
+  and a fraction of them own none: target-type and representation.
+  `ExecutableTargetTypeObligation` records that measurement.
+- **One needed only a correspondence**: bind-thunk's closure local was always
+  a joinable `.local`; what was missing was a `ValueId` on
+  `ExecutableLocalIdentity` to join it by.
+
+Every family keeps its instruction walk behind `typedObligationsRepresented`,
+for the three body shapes the typed form does not represent: an incomplete
+body, an `extern` declaration, and a global initializer's pseudo-callable.
+
+What is left on this list is the **access-fact family**, which is a different
+shape again: it keys on an `AccessId` as well as an instruction, and the
+`index` / `expr` instructions it joins on are the ones the typed body does
+represent.
 
 ### Note: how the bounds family left the instruction stream
 

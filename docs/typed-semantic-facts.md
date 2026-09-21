@@ -85,10 +85,12 @@ Not yet typed — the honest list:
   | const_get | `ExecutableExpression.const_get_obligation`; the index is the node's own `builtin_call.const_index` | the typed body |
   | bind thunk | its target-type and call-target halves, plus `ExecutableLocalIdentity.value_id` for the closure local | the typed body |
 
-  A family whose verifier reads the typed body may still fall back to the
-  stream for a body the typed form does not represent -- an incomplete body,
-  an `extern` declaration, a global initializer's pseudo-callable -- and
-  `todo.md` records which.
+  Every one of these falls back to the stream for a body the typed form does
+  not represent -- an incomplete body, an `extern` declaration, a global
+  initializer's pseudo-callable -- which is what
+  `mir_verify.typedObligationsRepresented` decides. The element/range-slice
+  access facts are the one instruction-scoped family still joined on the
+  stream alone; `todo.md` records why it is a different shape.
 - **The legacy instruction stream and the typed body are joined, but the
   stream is still there.** See [the join](#the-join-between-the-two-bodies)
   below. The remaining `Instruction.detail` readers are listed in
