@@ -1,5 +1,13 @@
 # MIR owns member, assignment, and return operand identities
 mode: raw
 
-= 4 "mir place_identity fn=update"
-= 2 "mir statement_operand_identity fn=update"
+# The four `mir place_identity` rows were the two field steps of
+# `box.pair.left` in each of the two statements. The typed body says it as
+# two places, each rooted at the global with two field projections.
+= 2 "mir exec_place fn=update"
+= 2 "root=symbol projections=field,field"
+# The two `mir statement_operand_identity` rows were the store and the
+# return; each typed statement names its operand node by ExprId.
+= 2 "mir exec_stmt fn=update"
++ "mir exec_stmt fn=update id=0 block=0 op=store"
++ "mir exec_stmt fn=update id=1 block=0 op=return_"

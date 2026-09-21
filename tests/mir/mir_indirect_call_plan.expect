@@ -1,5 +1,11 @@
 # executable MIR owns typed indirect calls and canonical callee roots
 mode: checked
 
-+ "mir indirect_callee_place fn=apply block=0"
-+ "mir indirect_callee_place fn=global_box_call block=0"
+# The callee root is canonical in the typed body: `apply` calls through a
+# parameter local, `global_box_call` through a field of a global. The row
+# this replaces (`mir indirect_callee_place`) said the same thing with a
+# root value id and a field index hung off the call instruction.
++ "mir exec_expr fn=apply id=0 block=0 stmt=0 op=local type=value"
++ "mir exec_expr fn=apply id=3 block=0 stmt=0 op=indirect_call callee=0 arguments=2"
++ "mir exec_place fn=global_box_call id=0 root=symbol projections=field"
++ "mir exec_expr fn=global_box_call id=3 block=0 stmt=0 op=indirect_call callee=0 arguments=2"

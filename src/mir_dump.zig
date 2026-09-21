@@ -182,6 +182,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                 try out.print(allocator, "{}", .{successor.index()});
             }
             try out.append(allocator, '\n');
+            if (typedBodyIsDumpable(&function.executable_body)) continue;
             for (block.instructions) |instruction| {
                 const source = instructionSourcePoint(function, instruction) orelse return error.InvalidSpanReference;
                 const value_id = if (instruction.typed_value_id) |id| valueSpelling(function, id) orelse "none" else "none";
@@ -309,6 +310,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                 }
             }
         }
+        try appendExecutableBodyDump(allocator, function, out);
         for (function.trap_edges) |edge| {
             const source = sourcePointForSpanId(function, edge.typed_span_id) orelse return error.InvalidTrapEdge;
             try out.print(
@@ -466,6 +468,250 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                 fact.source.line,
                 fact.source.column,
             },
+        );
+    }
+}
+
+/// Does this function's typed body carry the whole body, so the dump can
+/// show it instead of the instruction stream?
+///
+/// The same three shapes the verifier exempts are the ones with nothing to
+/// show: an incomplete body, an `extern` declaration and an empty body. They
+/// keep the legacy `mir instr` rows, because a dump of nothing is not a dump.
+fn typedBodyIsDumpable(body: *const mir_model.ExecutableBody) bool {
+    if (!body.isComplete()) return false;
+    return body.statements.len != 0 or body.expressions.len != 0 or body.terminators.len != 0;
+}
+
+fn executableSource(function: mir_model.Function, span_id: mir_model.SpanId) mir_model.SourcePoint {
+    return sourcePointForSpanId(function, span_id) orelse .{ .line = 0, .column = 0 };
+}
+
+fn appendOptionalIndex(allocator: std.mem.Allocator, out: *std.ArrayList(u8), id: anytype) !void {
+    if (id.isValid()) {
+        try out.print(allocator, "{}", .{id.index()});
+    } else {
+        try out.append(allocator, 'x');
+    }
+}
+
+/// Dump the typed body: what the backends actually render.
+///
+/// Every row names a node by its own id and its operation by the tag the
+/// typed model carries, so a representation change shows up here as a changed
+/// operation rather than as a changed `detail` string. That is the whole
+/// point of the repoint: the dump used to print a `kind` enum plus a string
+/// the front end chose, which is the classification the typed body replaces.
+///
+/// The obligations each node owns are printed beside it, because they are the
+/// join keys the eleven fact families name; a fact table row and the node it
+/// names can now be read against each other in one dump.
+fn appendExecutableBodyDump(allocator: std.mem.Allocator, function: mir_model.Function, out: *std.ArrayList(u8)) !void {
+    const body = &function.executable_body;
+    if (!typedBodyIsDumpable(body)) return;
+    for (body.parameters) |parameter| {
+        try out.print(
+            allocator,
+            "mir exec_param fn={s} local={} type={s}\n",
+            .{ function.name, parameter.local.index(), parameter.ty.name() },
+        );
+    }
+    for (body.locals) |local| {
+        const source = executableSource(function, local.declaration_span_id);
+        try out.print(
+            allocator,
+            "mir exec_local fn={s} local={} spelling={s} type={s} line={} column={}\n",
+            .{ function.name, local.id.index(), local.spelling, local.ty.name(), source.line, source.column },
+        );
+    }
+    for (body.places, 0..) |place, place_index| {
+        const source = executableSource(function, place.span_id);
+        try out.print(
+            allocator,
+            "mir exec_place fn={s} id={} root={s} projections=",
+            .{ function.name, place_index, @tagName(std.meta.activeTag(place.root)) },
+        );
+        if (place.projection_count == 0) try out.append(allocator, '-');
+        for (place.projections[0..place.projection_count], 0..) |projection, projection_index| {
+            if (projection_index != 0) try out.append(allocator, ',');
+            try out.print(allocator, "{s}", .{@tagName(std.meta.activeTag(projection))});
+        }
+        try out.print(allocator, " line={} column={}\n", .{ source.line, source.column });
+    }
+    for (body.expressions) |expression| {
+        const source = executableSource(function, expression.span_id);
+        try out.print(
+            allocator,
+            "mir exec_expr fn={s} id={} block={} stmt=",
+            .{ function.name, expression.id.index(), expression.block_id.index() },
+        );
+        try appendOptionalIndex(allocator, out, expression.owner_statement);
+        try out.print(
+            allocator,
+            " op={s}",
+            .{@tagName(std.meta.activeTag(expression.operation))},
+        );
+        try appendExecutableOperationDetail(allocator, expression, out);
+        try out.print(
+            allocator,
+            " type={s} line={} column={}\n",
+            .{ expression.result_ty.name(), source.line, source.column },
+        );
+        try appendExecutableObligations(allocator, function, expression, out);
+    }
+    for (body.statements) |statement| {
+        const source = executableSource(function, statement.span_id);
+        try out.print(
+            allocator,
+            "mir exec_stmt fn={s} id={} block={} op={s} line={} column={}\n",
+            .{ function.name, statement.id.index(), statement.block_id.index(), @tagName(std.meta.activeTag(statement.operation)), source.line, source.column },
+        );
+    }
+    for (body.terminators) |terminator| {
+        const source = executableSource(function, terminator.span_id);
+        try out.print(
+            allocator,
+            "mir exec_terminator fn={s} block={} op={s} line={} column={}\n",
+            .{ function.name, terminator.block_id.index(), @tagName(std.meta.activeTag(terminator.operation)), source.line, source.column },
+        );
+        if (terminator.call_target_obligation) |obligation| {
+            try out.print(
+                allocator,
+                "mir exec_obligation fn={s} owner=terminator{} kind=call_target id={} detail={s}\n",
+                .{ function.name, terminator.block_id.index(), obligation.id.index(), @tagName(obligation.kind) },
+            );
+        }
+    }
+    for (body.target_type_obligations) |obligation| {
+        try out.print(
+            allocator,
+            "mir exec_obligation fn={s} owner=",
+            .{function.name},
+        );
+        try appendOptionalIndex(allocator, out, obligation.owner);
+        try out.print(
+            allocator,
+            " kind=target_type id={} detail={s}\n",
+            .{ obligation.id.index(), @tagName(obligation.kind) },
+        );
+    }
+    for (body.representation_obligations) |obligation| {
+        try out.print(
+            allocator,
+            "mir exec_obligation fn={s} owner=",
+            .{function.name},
+        );
+        try appendOptionalIndex(allocator, out, obligation.owner);
+        try out.print(
+            allocator,
+            " kind=representation id={} detail={s}\n",
+            .{ obligation.id.index(), @tagName(obligation.kind) },
+        );
+    }
+}
+
+/// The part of an operation that is the operation's own content: its operator
+/// or builtin, and the operand nodes it names.
+///
+/// The operands are `ExprId`s, and printing them is what makes an operand
+/// identity readable in the dump. In the instruction stream the same thing was
+/// a `SpanId` on the instruction, printed as `mir operand_identity` -- a
+/// source coordinate standing in for a node, because the stream had no node
+/// to point at. Here the operand *is* the node.
+///
+/// Arms not listed carry their operands in a shape with no single reading
+/// (an owned operand slice, a call's argument list, a place); they print
+/// their operation and their type, which is what the row is for.
+fn appendExecutableOperationDetail(
+    allocator: std.mem.Allocator,
+    expression: mir_model.ExecutableExpression,
+    out: *std.ArrayList(u8),
+) !void {
+    switch (expression.operation) {
+        .unary => |unary| try out.print(allocator, " operator={s} operands={}", .{ @tagName(unary.op), unary.operand.index() }),
+        .binary => |binary| try out.print(
+            allocator,
+            " operator={s} operands={},{}",
+            .{ @tagName(binary.op), binary.left.index(), binary.right.index() },
+        ),
+        .cast => |cast| try out.print(allocator, " operator={s} operands={}", .{ @tagName(cast.kind), cast.operand.index() }),
+        .deref => |operand| try out.print(allocator, " operands={}", .{operand.index()}),
+        .slice_length => |operand| try out.print(allocator, " operands={}", .{operand.index()}),
+        .member => |member| try out.print(allocator, " field_index={} operands={}", .{ member.field_index, member.base.index() }),
+        .index => |indexed| try out.print(
+            allocator,
+            " checked={} operands={},{}",
+            .{ indexed.checked, indexed.base.index(), indexed.index.index() },
+        ),
+        .range_slice => |slice| try out.print(
+            allocator,
+            " checked={} operands={},{},{}",
+            .{ slice.checked, slice.base.index(), slice.start.index(), slice.end.index() },
+        ),
+        .load => |load| try out.print(allocator, " place={}", .{load.place.index()}),
+        .address_of => |address| try out.print(allocator, " place={}", .{address.place.index()}),
+        .builtin_call => |builtin| {
+            try out.print(allocator, " builtin={s}", .{@tagName(builtin.kind)});
+            if (builtin.const_index) |const_index| try out.print(allocator, " const_index={}", .{const_index});
+        },
+        .indirect_call => |call| try out.print(allocator, " callee={} arguments={}", .{ call.callee.index(), call.argument_count }),
+        else => {},
+    }
+}
+
+/// The typed obligations one expression node owns, one row each. Each is a
+/// join key an instruction-scoped fact table names.
+fn appendExecutableObligations(
+    allocator: std.mem.Allocator,
+    function: mir_model.Function,
+    expression: mir_model.ExecutableExpression,
+    out: *std.ArrayList(u8),
+) !void {
+    if (mir_model.executableExpressionBoundsObligation(expression)) |obligation| {
+        try out.print(
+            allocator,
+            "mir exec_obligation fn={s} owner={} kind=bounds id={} detail={s}\n",
+            .{ function.name, expression.id.index(), obligation.id.index(), @tagName(obligation.kind) },
+        );
+    }
+    if (mir_model.executableExpressionAccessObligation(expression)) |obligation| {
+        try out.print(
+            allocator,
+            "mir exec_obligation fn={s} owner={} kind=access id={} detail={s}\n",
+            .{ function.name, expression.id.index(), obligation.id.index(), @tagName(std.meta.activeTag(expression.operation)) },
+        );
+    }
+    if (expression.literal_conversion.isValid()) {
+        try out.print(
+            allocator,
+            "mir exec_obligation fn={s} owner={} kind=literal_conversion id={} detail={s}\n",
+            .{
+                function.name,
+                expression.id.index(),
+                expression.literal_conversion.id.index(),
+                if (mir_model.executableLiteralConversionIsFloat(expression)) "float" else "integer",
+            },
+        );
+    }
+    if (expression.call_target_obligation) |obligation| {
+        try out.print(
+            allocator,
+            "mir exec_obligation fn={s} owner={} kind=call_target id={} detail={s}\n",
+            .{ function.name, expression.id.index(), obligation.id.index(), @tagName(obligation.kind) },
+        );
+    }
+    if (expression.range_obligation) |obligation| {
+        try out.print(
+            allocator,
+            "mir exec_obligation fn={s} owner={} kind=range id={} detail={s}\n",
+            .{ function.name, expression.id.index(), obligation.id.index(), @tagName(obligation.op) },
+        );
+    }
+    if (expression.const_get_obligation.isValid()) {
+        try out.print(
+            allocator,
+            "mir exec_obligation fn={s} owner={} kind=const_get id={} detail=const_get\n",
+            .{ function.name, expression.id.index(), expression.const_get_obligation.index() },
         );
     }
 }

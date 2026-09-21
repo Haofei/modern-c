@@ -1,5 +1,9 @@
 # MIR owns const_get base result and index facts
 mode: raw
 
-+ "kind=index detail=const_get type=u32 const_index=2"
+# The typed node is the const_get projection itself: a builtin_call whose
+# compile-time index is part of the node. The `index` instruction this used
+# to name was told apart from an element read by its `detail` string.
++ "op=builtin_call builtin=const_get const_index=2 type=u32"
++ "mir exec_obligation fn=get_word owner=1 kind=const_get"
 + "mir const_get_fact fn=get_word index=2 typed_span_id="

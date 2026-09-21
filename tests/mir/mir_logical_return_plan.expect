@@ -1,4 +1,9 @@
 # executable MIR owns logical evaluation mode
 mode: raw
 
-+ "mir operand_identity fn=nested_bool"
+# `mir operand_identity` printed the operand *span* ids a logical operator
+# instruction carried, because the stream had no node to point at. The typed
+# body names the operand nodes, so the nesting is readable directly.
++ "mir exec_expr fn=nested_bool id=1 block=0 stmt=0 op=unary operator=logical_not operands=0"
++ "mir exec_expr fn=nested_bool id=4 block=0 stmt=0 op=binary operator=logical_and operands=2,3"
++ "mir exec_expr fn=nested_bool id=5 block=0 stmt=0 op=binary operator=logical_or operands=1,4"

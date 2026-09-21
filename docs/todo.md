@@ -75,7 +75,7 @@ backends off syntax, is described in
 
 | Priority | Work | Why, and what it depends on |
 |---|---|---|
-| P0 | Collapse MIR to the single `ExecutableBody`: the instruction-scoped fact tables are folded into typed obligations (all eleven families, see the note below); what is left is the remaining consumers of the string `Instruction.detail` field, repointing `mir_dump.zig`, and then deleting `Function.blocks[].instructions`. | The core of the original design review. Two body representations cost every change twice. The fold had to come first, because surveying all eleven verifier families showed none could move until the typed body represented the obligations the checking instructions carry. Depends on the golden-test conversion for affordability. |
+| P0 | Collapse MIR to the single `ExecutableBody`: the instruction-scoped fact tables are folded into typed obligations (all eleven families), and the dump shows the typed body (see the notes below). What is left is the finding channel -- the one group of `Instruction.detail` readers that is not a fallback -- and then deleting `Function.blocks[].instructions`. | The core of the original design review. Two body representations cost every change twice. The fold had to come first, because surveying all eleven verifier families showed none could move until the typed body represented the obligations the checking instructions carry. Depends on the golden-test conversion for affordability. |
 | P0 | Replace the string-carrying `mir.ValueType` with type ids from the resolved table, then drop the parallel `typed_result_ty` mirrors. | Falls out once the table answers everything `ValueType.name()` is asked for. |
 | P0 | Finish the sema handoff: intrinsic call results where sema and builder share one rule, `address_of` / `borrow` / `~`, alias collapse once the emitters take spellings from the table, and deletion of the builder's own type maps once unit tests build MIR through a checker. | Each slice: record in sema, read in the builder under the agree-assertion, delete the builder copy. |
 | P1 | Give expressions a node identity that survives copying, or a per-instance span remap in monomorphization. | Unblocks monomorphizing after sema and stops instances failing closed in the resolved table. |
@@ -535,6 +535,42 @@ that function's body the way `cFunctionBody` does) and a profile/checks
 selector line, before any of the 220 can move without losing what they prove.
 Adding those to `src/fixture_expect.zig` is the next step; the 4 uniform tests
 are not a reason to start the corpus before it can hold the other 421.
+
+### Note: what the MIR dump shows now
+
+`mir_dump.zig` prints the typed body where there is one. A function whose
+`ExecutableBody` is complete and non-empty gets `mir exec_param`,
+`mir exec_local`, `mir exec_place`, `mir exec_expr`, `mir exec_stmt`,
+`mir exec_terminator` and `mir exec_obligation` rows instead of the
+`mir instr` run and its six identity sub-rows. Measured over `tests/mir`,
+`tests/c_emit` and `tests/spec`: **6,727 typed rows against 623 `mir instr`
+rows left**, and those 623 are the three shapes with no typed body -- an
+incomplete body, an `extern` declaration and an empty one. A dump of nothing
+is not a dump, so they keep the stream rows.
+
+Three things the typed rows say that the instruction rows could not:
+
+- **An operation is a tag, not a string.** A row prints
+  `op=binary operator=logical_or`, from the typed model, where the old row
+  printed `kind=binary detail=logical_or` -- the same text, but one is the
+  model and the other was a front-end string a backend was not allowed to
+  read. A representation change now shows up in the dump as a changed
+  operation.
+- **An operand is a node.** `mir operand_identity`, `mir place_identity`,
+  `mir index_identity` and `mir statement_operand_identity` printed *span ids*
+  hung off an instruction, because the stream had no node to point at. The
+  typed rows print `operands=1,4` -- the `ExprId`s themselves -- so the nesting
+  of `!a || (b && c)` is readable directly off the dump.
+- **An obligation has an owner.** `mir exec_obligation` prints the ownership
+  edge each of the eleven families joins on: `owner=<ExprId> kind=target_type
+  detail=direct_call_result`, or `owner=x` for the tenth of target-type
+  obligations the body owns and no node does. A fact-table row and the node it
+  names can be read against each other in one dump, which is what the fold was
+  for.
+
+What did not move: the `mir verify` finding rows, which read
+`Instruction.detail` because the finding *is* the instruction -- see the next
+note -- and the fact rows, which print a fact's own fields.
 
 ### Note: verifier checks that still read the stream, and why
 

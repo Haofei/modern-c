@@ -88,7 +88,11 @@ Beyond the outcome, a fixture (or its manifest row) carries the axes a gate must
 - The `// SPEC:` headers across `tests/spec/*.mc` — the conformance manifest, read by
   `src/spec_tests.zig`.
 - `tests/mir/<name>.mc` plus `tests/mir/<name>.expect` — the MIR dump corpus, walked by the
-  one table-driven test in `src/mir_fixture_tests.zig`.
+  one table-driven test in `src/mir_fixture_tests.zig`. The dump shows the *typed* body
+  (`mir exec_param` / `exec_local` / `exec_place` / `exec_expr` / `exec_stmt` /
+  `exec_terminator` / `exec_obligation`) for every function whose `ExecutableBody` is
+  complete; the legacy `mir instr` rows appear only for the three shapes that have no typed
+  body — an incomplete body, an `extern` declaration and an empty one.
 - `tests/mir_verify/<name>.mc` plus `tests/mir_verify/<name>.expect` — the MIR
   **verification-fact** corpus, walked by the one table-driven test in
   `src/mir_verify_fixture_tests.zig`. The text a rule matches is the verifier's findings

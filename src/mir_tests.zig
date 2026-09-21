@@ -2933,9 +2933,28 @@ test "MIR target-type owner identities mirror direct calls" {
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
     try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
-    const expected_call_identity = try std.fmt.allocPrint(std.testing.allocator, "mir call_identity fn=caller block=0 kind=call detail=callee callee_span_id={}", .{result_span.id.index()});
-    defer std.testing.allocator.free(expected_call_identity);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, expected_call_identity) != null);
+    // The dump used to show `mir call_identity ... detail=callee
+    // callee_span_id=N`: the call instruction's callee span, which is where
+    // the `direct_call_result` fact is recorded. The typed dump shows the
+    // ownership edge itself -- the obligation named by the *call* node -- so
+    // the needle asserts the same correspondence without a span standing in
+    // for a node. See the target-type note in `docs/todo.md`.
+    var call_expr: ?mir.ExprId = null;
+    for (caller.executable_body.expressions) |expression| switch (expression.operation) {
+        .direct_call => {
+            try std.testing.expect(call_expr == null);
+            call_expr = expression.id;
+        },
+        else => {},
+    };
+    const expected_call_obligation = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "mir exec_obligation fn=caller owner={} kind=target_type",
+        .{(call_expr orelse return error.TestUnexpectedResult).index()},
+    );
+    defer std.testing.allocator.free(expected_call_obligation);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, expected_call_obligation) != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "detail=direct_call_result") != null);
     const expected_fact_result = try std.fmt.allocPrint(std.testing.allocator, "typed_result_ty_id={}", .{result_type.id.index()});
     defer std.testing.allocator.free(expected_fact_result);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, expected_fact_result) != null);
