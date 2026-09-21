@@ -106,20 +106,28 @@ pub fn aggregateDiagnostic(finding: []const u8) []const u8 {
     return "E_NO_IMPLICIT_CONVERSION";
 }
 
-pub fn resultFindingDiagnostic(finding: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, finding, "unhandled_result")) return "E_UNHANDLED_RESULT";
-    if (std.mem.eql(u8, finding, "try_requires_result_or_nullable")) return "E_TRY_REQUIRES_RESULT_OR_NULLABLE";
-    if (std.mem.eql(u8, finding, "try_payload_c_void_conversion")) return "E_C_VOID_CONVERSION";
-    if (std.mem.eql(u8, finding, "try_payload_pointer_conversion")) return "E_NO_IMPLICIT_POINTER_CONVERSION";
-    if (std.mem.eql(u8, finding, "try_payload_type_mismatch")) return "E_RETURN_TYPE_MISMATCH";
-    if (std.mem.eql(u8, finding, "if_let_optional_required")) return "E_IF_LET_OPTIONAL_REQUIRED";
-    if (std.mem.eql(u8, finding, "if_let_result_required")) return "E_IF_LET_RESULT_REQUIRED";
-    if (std.mem.eql(u8, finding, "if_let_result_tag")) return "E_IF_LET_RESULT_TAG";
-    if (std.mem.eql(u8, finding, "if_let_narrow_pattern")) return "E_IF_LET_NARROW_PATTERN";
-    if (std.mem.eql(u8, finding, "switch_result_tag")) return "E_SWITCH_RESULT_TAG";
-    if (std.mem.eql(u8, finding, "switch_result_required")) return "E_SWITCH_RESULT_REQUIRED";
-    if (std.mem.eql(u8, finding, "switch_multi_binding_arm")) return "E_SWITCH_MULTI_BINDING_ARM";
-    return null;
+/// The diagnostic a `Result` control-flow finding is reported as, or null
+/// for the one member that is an observation rather than a refusal.
+///
+/// The `eql` chain this replaced returned null for *anything* it did not
+/// recognise, so "no diagnostic" and "no mapping" were one answer. Here the
+/// only null is `try_handled`, deliberately.
+pub fn resultDiagnostic(finding: mir_model.ResultFinding) ?[]const u8 {
+    return switch (finding) {
+        .try_handled => null,
+        .unhandled_result => "E_UNHANDLED_RESULT",
+        .try_requires_result_or_nullable => "E_TRY_REQUIRES_RESULT_OR_NULLABLE",
+        .try_payload_c_void_conversion => "E_C_VOID_CONVERSION",
+        .try_payload_pointer_conversion => "E_NO_IMPLICIT_POINTER_CONVERSION",
+        .try_payload_type_mismatch => "E_RETURN_TYPE_MISMATCH",
+        .if_let_optional_required => "E_IF_LET_OPTIONAL_REQUIRED",
+        .if_let_result_required => "E_IF_LET_RESULT_REQUIRED",
+        .if_let_result_tag => "E_IF_LET_RESULT_TAG",
+        .if_let_narrow_pattern => "E_IF_LET_NARROW_PATTERN",
+        .switch_result_tag => "E_SWITCH_RESULT_TAG",
+        .switch_result_required => "E_SWITCH_RESULT_REQUIRED",
+        .switch_multi_binding_arm => "E_SWITCH_MULTI_BINDING_ARM",
+    };
 }
 
 /// The diagnostic a switch-coverage finding is reported as. The chain this

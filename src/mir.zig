@@ -438,7 +438,6 @@ const hasAttr = mir_verify_util.hasAttr;
 const nullabilityDiagnostic = mir_verify_util.nullabilityDiagnostic;
 const conversionDiagnostic = mir_verify_util.conversionDiagnostic;
 const aggregateDiagnostic = mir_verify_util.aggregateDiagnostic;
-const resultFindingDiagnostic = mir_verify_util.resultFindingDiagnostic;
 const addressDerefDiagnostic = mir_verify_util.addressDerefDiagnostic;
 const addressClassMismatchDiagnostic = mir_verify_util.addressClassMismatchDiagnostic;
 const ffiFindingDiagnostic = mir_verify_util.ffiFindingDiagnostic;

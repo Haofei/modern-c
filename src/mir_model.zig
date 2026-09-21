@@ -4995,6 +4995,29 @@ pub const SwitchFinding = enum {
     switch_literal_type_mismatch,
 };
 
+/// One `Result`/optional control-flow refusal.
+///
+/// `try_handled` is the one member that is not a refusal at all: it records
+/// that a `try` operand *was* a try-capable type, which the verification-fact
+/// dump prints and no diagnostic reports. It was expressible in the string
+/// channel only because `resultFindingDiagnostic` returned an optional; the
+/// typed form says it directly.
+pub const ResultFinding = enum {
+    unhandled_result,
+    try_handled,
+    try_requires_result_or_nullable,
+    try_payload_c_void_conversion,
+    try_payload_pointer_conversion,
+    try_payload_type_mismatch,
+    if_let_optional_required,
+    if_let_result_required,
+    if_let_result_tag,
+    if_let_narrow_pattern,
+    switch_result_tag,
+    switch_result_required,
+    switch_multi_binding_arm,
+};
+
 /// What a refusal *is*, as a value rather than as a string.
 ///
 /// One arm per finding family. A family whose diagnostic needs more than the
@@ -5005,6 +5028,7 @@ pub const FindingKind = union(enum) {
     arithmetic_domain: ArithmeticDomainFinding,
     assignment: AssignmentFinding,
     switch_coverage: SwitchFinding,
+    result: ResultFinding,
 };
 
 /// A refusal the MIR builder recorded while lowering a body.

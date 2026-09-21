@@ -120,6 +120,7 @@ const PointerProvenanceInvalidationReason = mir_model.PointerProvenanceInvalidat
 const PointerShape = mir_model.PointerShape;
 const RangeFact = mir_model.RangeFact;
 const RepresentationFact = mir_model.RepresentationFact;
+const ResultFinding = mir_model.ResultFinding;
 const RepresentationUseKind = mir_model.RepresentationUseKind;
 const SignatureTypeId = mir_model.SignatureTypeId;
 const SignatureTypeTable = mir_model.SignatureTypeTable;
@@ -331,7 +332,6 @@ const unaryNegOperandAllowed = mir_operator.unaryNegOperandAllowed;
 const unionCasePayloadType = mir_facade.unionCasePayloadType;
 const unionContainsCase = mir_facade.unionContainsCase;
 const unionTypeNameAlias = mir_type.unionTypeNameAlias;
-const unknownResultType = mir_type.unknownResultType;
 const valueTypeFromExpr = mir_type.valueTypeFromExpr;
 const valueTypeFromTypeAlias = mir_type.valueTypeFromTypeAlias;
 const valueTypeFromTypeName = mir_type.valueTypeFromTypeName;
@@ -12370,19 +12370,19 @@ pub const FunctionBuilder = struct {
         switch (node.pattern.kind) {
             .bind => {
                 if (!isMirNullableValue(value_ty)) {
-                    try self.addInstr(.result_check, "if_let_optional_required", value_ty, node.pattern.span);
+                    try self.addFinding(.{ .result = .if_let_optional_required }, node.pattern.span);
                 }
             },
             .tag_bind => |tag_bind| {
                 if (!isResultNarrowingTag(tag_bind.tag.text)) {
-                    const finding = if (isResultType(value_ty)) "if_let_result_tag" else "if_let_narrow_pattern";
-                    try self.addInstr(.result_check, finding, value_ty, tag_bind.tag.span);
+                    const finding: ResultFinding = if (isResultType(value_ty)) .if_let_result_tag else .if_let_narrow_pattern;
+                    try self.addFinding(.{ .result = finding }, tag_bind.tag.span);
                 } else if (!isResultType(value_ty)) {
-                    try self.addInstr(.result_check, "if_let_result_required", value_ty, node.pattern.span);
+                    try self.addFinding(.{ .result = .if_let_result_required }, node.pattern.span);
                 }
             },
             .wildcard, .tag, .literal => {
-                try self.addInstr(.result_check, "if_let_narrow_pattern", value_ty, node.pattern.span);
+                try self.addFinding(.{ .result = .if_let_narrow_pattern }, node.pattern.span);
             },
         }
     }
@@ -12967,9 +12967,9 @@ pub const FunctionBuilder = struct {
                                 try self.addDuplicateSwitchStringCaseCheck(&union_cases_seen, tag.text, tag.span);
                             }
                         } else if (isResultType(subject_ty) and !isResultNarrowingTag(tag.text)) {
-                            try self.addInstr(.result_check, "switch_result_tag", subject_ty, tag.span);
+                            try self.addFinding(.{ .result = .switch_result_tag }, tag.span);
                         } else if (!isResultType(subject_ty) and isResultNarrowingTag(tag.text) and !isMirEnum(subject_ty)) {
-                            try self.addInstr(.result_check, "switch_result_required", subject_ty, tag.span);
+                            try self.addFinding(.{ .result = .switch_result_required }, tag.span);
                         }
                         if (enum_info) |info| {
                             if (!enumContainsCase(info, tag.text)) {
@@ -12994,9 +12994,9 @@ pub const FunctionBuilder = struct {
                                 try self.addDuplicateSwitchStringCaseCheck(&union_cases_seen, tag_bind.tag.text, tag_bind.tag.span);
                             }
                         } else if (isResultType(subject_ty) and !isResultNarrowingTag(tag_bind.tag.text)) {
-                            try self.addInstr(.result_check, "switch_result_tag", subject_ty, tag_bind.tag.span);
+                            try self.addFinding(.{ .result = .switch_result_tag }, tag_bind.tag.span);
                         } else if (!isResultType(subject_ty) and isResultNarrowingTag(tag_bind.tag.text)) {
-                            try self.addInstr(.result_check, "switch_result_required", subject_ty, pattern.span);
+                            try self.addFinding(.{ .result = .switch_result_required }, pattern.span);
                         }
                         if (isResultType(subject_ty) and isResultNarrowingTag(tag_bind.tag.text)) {
                             try self.addDuplicateSwitchStringCaseCheck(&result_cases_seen, tag_bind.tag.text, tag_bind.tag.span);
@@ -13044,7 +13044,7 @@ pub const FunctionBuilder = struct {
                 }
             }
             if (binding_pattern_count > 1 and arm.patterns.len > 0) {
-                try self.addInstr(.result_check, "switch_multi_binding_arm", subject_ty, arm.patterns[0].span);
+                try self.addFinding(.{ .result = .switch_multi_binding_arm }, arm.patterns[0].span);
             }
             if (arm_has_wildcard) wildcard_seen = true;
         }
@@ -13763,9 +13763,9 @@ pub const FunctionBuilder = struct {
                 const operand_ty = self.typeExprForExpr(inner.operand.*) orelse return error.UnsupportedMirConstruction;
                 try self.appendTargetTypeFact(.try_operand, operand_ty, inner_ty, inner.operand.*.span);
                 if (isTryCapableType(inner_ty)) {
-                    try self.addInstr(.result_check, "try_handled", inner_ty, expr.span);
+                    try self.addFinding(.{ .result = .try_handled }, expr.span);
                 } else {
-                    try self.addInstr(.result_check, "try_requires_result_or_nullable", inner_ty, expr.span);
+                    try self.addFinding(.{ .result = .try_requires_result_or_nullable }, expr.span);
                 }
                 const try_ty = self.exprType(expr);
                 // For a nullable pointer, the unwrap null test is itself the
@@ -18988,7 +18988,7 @@ pub const FunctionBuilder = struct {
             if (!isResultType(local_ty)) continue;
             for (local.names) |name| {
                 if (!self.resultLocalHandledLater(name.text, block.items[i + 1 ..])) {
-                    try self.addInstr(.result_check, "unhandled_result", unknownResultType(), name.span);
+                    try self.addFinding(.{ .result = .unhandled_result }, name.span);
                 }
             }
         }
@@ -19001,10 +19001,10 @@ pub const FunctionBuilder = struct {
             const target_name = directIdentName(assignment.target) orelse continue;
             if (!isResultType(self.typeForAssignmentTarget(assignment.target)) or !isResultType(self.exprType(assignment.value))) continue;
             if (self.resultLocalHasPendingValueBefore(target_name, block.items[0..i])) {
-                try self.addInstr(.result_check, "unhandled_result", unknownResultType(), assignment.target.span);
+                try self.addFinding(.{ .result = .unhandled_result }, assignment.target.span);
             }
             if (!self.resultLocalHandledLater(target_name, block.items[i + 1 ..])) {
-                try self.addInstr(.result_check, "unhandled_result", unknownResultType(), assignment.value.span);
+                try self.addFinding(.{ .result = .unhandled_result }, assignment.value.span);
             }
         }
     }
@@ -19012,13 +19012,13 @@ pub const FunctionBuilder = struct {
     fn addResultExpressionStatementCheck(self: *FunctionBuilder, expr: ast.Expr) !void {
         if (!isResultType(self.exprType(expr))) return;
         if (exprHandlesAnyResult(expr)) return;
-        try self.addInstr(.result_check, "unhandled_result", unknownResultType(), expr.span);
+        try self.addFinding(.{ .result = .unhandled_result }, expr.span);
     }
 
     fn addResultDeferCheck(self: *FunctionBuilder, expr: ast.Expr) !void {
         if (!isResultType(self.exprType(expr))) return;
         if (exprHandlesAnyResult(expr)) return;
-        try self.addInstr(.result_check, "unhandled_result", unknownResultType(), expr.span);
+        try self.addFinding(.{ .result = .unhandled_result }, expr.span);
     }
 
     fn addResultPayloadConversionCheck(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr, span: ast.Span) !void {
@@ -19030,8 +19030,13 @@ pub const FunctionBuilder = struct {
         }
         const source_ty = self.exprType(expr);
         if (!mirTypesAreCompatible(target_ty, source_ty)) {
-            const finding = if (isCVoidPointerConversion(target_ty, source_ty)) "try_payload_c_void_conversion" else if (isPointerViewConversion(target_ty, source_ty)) "try_payload_pointer_conversion" else "try_payload_type_mismatch";
-            try self.addInstr(.result_check, finding, source_ty, span);
+            const finding: ResultFinding = if (isCVoidPointerConversion(target_ty, source_ty))
+                .try_payload_c_void_conversion
+            else if (isPointerViewConversion(target_ty, source_ty))
+                .try_payload_pointer_conversion
+            else
+                .try_payload_type_mismatch;
+            try self.addFinding(.{ .result = finding }, span);
         }
     }
 

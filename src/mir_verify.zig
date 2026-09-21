@@ -77,7 +77,7 @@ const nullabilityDiagnostic = mir_verify_util.nullabilityDiagnostic;
 const operatorDiagnostic = mir_verify_util.operatorDiagnostic;
 const producerHasDominatingRepresentationCheck = mir_representation.producerHasDominatingCheck;
 const representationFactKind = mir_facade.representationFactKind;
-const resultFindingDiagnostic = mir_verify_util.resultFindingDiagnostic;
+const resultDiagnostic = mir_verify_util.resultDiagnostic;
 const sourcePointForSpanId = mir_cleanup_cfg.sourcePointForSpanId;
 const sourcePointSpan = mir_cleanup_cfg.sourcePointSpan;
 const switchDiagnostic = mir_verify_util.switchDiagnostic;
@@ -239,15 +239,6 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                         .{code},
                     );
                 }
-                if (instruction.kind == .result_check) {
-                    if (resultFindingDiagnostic(instruction.detail)) |code| {
-                        reporter.err(
-                            sourcePointSpan(source),
-                            "{s}: MIR verifier found invalid Result control-flow handling",
-                            .{code},
-                        );
-                    }
-                }
                 if (irqContextCallFinding(mir, function, instruction)) |finding| {
                     const code = irqContextDiagnostic(finding);
                     reporter.err(
@@ -284,6 +275,11 @@ fn reportFindings(function: Function, reporter: *diagnostics.Reporter) void {
                 sourcePointSpan(source),
                 "{s}: MIR verifier found invalid arithmetic-domain operation",
                 .{arithmeticDomainDiagnostic(domain)},
+            ),
+            .result => |result| if (resultDiagnostic(result)) |code| reporter.err(
+                sourcePointSpan(source),
+                "{s}: MIR verifier found invalid Result control-flow handling",
+                .{code},
             ),
             .switch_coverage => |coverage| reporter.err(
                 sourcePointSpan(source),
