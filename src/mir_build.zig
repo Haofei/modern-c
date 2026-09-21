@@ -85,6 +85,8 @@ const ExecutableTrapOwner = mir_model.ExecutableTrapOwner;
 const ExecutableUnaryOp = mir_model.ExecutableUnaryOp;
 const ExprId = mir_model.ExprId;
 const FfiParamContract = mir_model.FfiParamContract;
+const Finding = mir_model.Finding;
+const FindingKind = mir_model.FindingKind;
 const FloatFact = mir_model.FloatFact;
 const Function = mir_model.Function;
 const FunctionSummary = mir_summary.FunctionSummary;
@@ -5011,6 +5013,7 @@ pub const FunctionBuilder = struct {
     return_callable_signature: ?mir_model.ExecutableCallSignature = null,
     return_dyn_trait_symbol_id: SymbolId = .invalid,
     blocks: std.ArrayList(MutableBlock),
+    findings: std.ArrayList(Finding),
     trap_edges: std.ArrayList(TrapEdge),
     contract_regions: std.ArrayList(ContractRegion),
     range_facts: std.ArrayList(RangeFact),
@@ -5216,6 +5219,7 @@ pub const FunctionBuilder = struct {
             .pointer_return_summaries = pointer_return_summaries,
             .aggregate_return_pointer_facts = aggregate_return_pointer_facts,
             .blocks = blocks,
+            .findings = .empty,
             .trap_edges = .empty,
             .contract_regions = .empty,
             .range_facts = .empty,
@@ -5423,6 +5427,7 @@ pub const FunctionBuilder = struct {
             .pointer_return_summaries = pointer_return_summaries,
             .aggregate_return_pointer_facts = aggregate_return_pointer_facts,
             .blocks = blocks,
+            .findings = .empty,
             .trap_edges = .empty,
             .contract_regions = .empty,
             .range_facts = .empty,
@@ -5512,6 +5517,7 @@ pub const FunctionBuilder = struct {
             block.successors.deinit(self.allocator);
         }
         self.blocks.deinit(self.allocator);
+        self.findings.deinit(self.allocator);
         self.trap_edges.deinit(self.allocator);
         self.contract_regions.deinit(self.allocator);
         self.range_facts.deinit(self.allocator);
@@ -5606,6 +5612,8 @@ pub const FunctionBuilder = struct {
             });
         }
 
+        const findings = try self.findings.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(findings);
         const trap_edges = try self.trap_edges.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(trap_edges);
         const contract_regions = try self.contract_regions.toOwnedSlice(self.allocator);
@@ -5733,6 +5741,7 @@ pub const FunctionBuilder = struct {
             .no_lang_trap = self.no_lang_trap,
             .irq_context = self.irq_context,
             .blocks = try blocks.toOwnedSlice(self.allocator),
+            .findings = findings,
             .trap_edges = trap_edges,
             .contract_regions = contract_regions,
             .range_facts = range_facts,
@@ -13121,20 +13130,20 @@ pub const FunctionBuilder = struct {
         const operand_ty = self.exprType(node.expr.*);
         switch (node.op) {
             .neg => {
-                if (isCheckedUnsignedType(operand_ty)) try self.addInstr(.operator_check, "unsigned_negation", .unknown, span);
+                if (isCheckedUnsignedType(operand_ty)) try self.addFinding(.{ .operator = .unsigned_negation }, span);
                 if (!unaryNegOperandAllowed(self.exprArithmeticDomain(node.expr.*), operand_ty)) {
-                    try self.addInstr(.operator_check, "operator_operand", .unknown, span);
+                    try self.addFinding(.{ .operator = .operator_operand }, span);
                 }
             },
             .bit_not => {
                 try self.addBitwiseOperatorOperandChecks(operand_ty, span);
                 if (!bitwiseOperandAllowed(self.exprArithmeticDomain(node.expr.*), operand_ty)) {
-                    try self.addInstr(.operator_check, "operator_operand", .unknown, span);
+                    try self.addFinding(.{ .operator = .operator_operand }, span);
                 }
             },
             .logical_not => {
                 if (operand_ty != .bool and operand_ty != .unknown and operand_ty != .never) {
-                    try self.addInstr(.operator_check, "bool_operator_operand", .unknown, span);
+                    try self.addFinding(.{ .operator = .bool_operator_operand }, span);
                 }
             },
         }
@@ -13152,36 +13161,36 @@ pub const FunctionBuilder = struct {
             if (!bitwiseOperandAllowed(self.exprArithmeticDomain(node.left.*), left_ty) or
                 !bitwiseOperandAllowed(self.exprArithmeticDomain(node.right.*), right_ty))
             {
-                try self.addInstr(.operator_check, "operator_operand", .unknown, span);
+                try self.addFinding(.{ .operator = .operator_operand }, span);
             }
         }
         if (mirIsLogicalBinary(node.op) and !logicalOperandsAllowed(left_ty, right_ty)) {
-            try self.addInstr(.operator_check, "bool_operator_operand", .unknown, span);
+            try self.addFinding(.{ .operator = .bool_operator_operand }, span);
         }
         if (mirIsArithmeticBinary(node.op) or mirIsComparisonBinary(node.op)) {
             if (floatBinaryFinding(node.op, left_ty, right_ty)) |finding| {
-                try self.addInstr(.operator_check, finding, .unknown, span);
+                try self.addFinding(.{ .operator = finding }, span);
             }
             if (checkedIntegerBinaryFinding(left_ty, right_ty)) |finding| {
-                try self.addInstr(.operator_check, finding, .unknown, span);
+                try self.addFinding(.{ .operator = finding }, span);
             }
         }
         // D.1 pointer operator legality (section 9).
         if (mirIsPointerArithmetic(node.op) and (isMirSingleObjectPointer(left_ty) or isMirSingleObjectPointer(right_ty))) {
-            try self.addInstr(.operator_check, "pointer_arith_single_object", .unknown, span);
+            try self.addFinding(.{ .operator = .pointer_arith_single_object }, span);
         }
         if (mirIsOrderedComparison(node.op) and (isMirPointerOrView(left_ty) or isMirPointerOrView(right_ty))) {
-            try self.addInstr(.operator_check, "pointer_ordering", .unknown, span);
+            try self.addFinding(.{ .operator = .pointer_ordering }, span);
         }
     }
 
     fn addBitwiseOperatorOperandChecks(self: *FunctionBuilder, ty: ValueType, span: ast.Span) !void {
         if (isCheckedSignedType(ty)) {
-            try self.addInstr(.operator_check, "bitwise_signed_operand", .unknown, span);
+            try self.addFinding(.{ .operator = .bitwise_signed_operand }, span);
         } else if (ty == .bool) {
-            try self.addInstr(.operator_check, "bitwise_bool_operand", .unknown, span);
+            try self.addFinding(.{ .operator = .bitwise_bool_operand }, span);
         } else if (isPointerLikeType(ty)) {
-            try self.addInstr(.operator_check, "bitwise_pointer_operand", .unknown, span);
+            try self.addFinding(.{ .operator = .bitwise_pointer_operand }, span);
         }
     }
 
@@ -15403,6 +15412,16 @@ pub const FunctionBuilder = struct {
 
     fn addInstr(self: *FunctionBuilder, kind: Instruction.Kind, detail: []const u8, ty: ValueType, span: ast.Span) !void {
         try self.addInstrWithValue(kind, detail, ty, span, null);
+    }
+
+    /// Record a refusal. A finding is a value on the function, not an
+    /// instruction whose `detail` string names it: nothing downstream has to
+    /// classify a spelling to learn which diagnostic it is.
+    fn addFinding(self: *FunctionBuilder, kind: FindingKind, span: ast.Span) !void {
+        try self.findings.append(self.allocator, .{
+            .kind = kind,
+            .typed_span_id = try self.internSpanId(self.sourcePoint(span)),
+        });
     }
 
     fn addConstGetInstr(self: *FunctionBuilder, ty: ValueType, index: usize, span: ast.Span) !void {
@@ -20026,6 +20045,7 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
         allocator.free(block.successors);
     }
     allocator.free(function.blocks);
+    if (function.findings.len != 0) allocator.free(function.findings);
     allocator.free(function.trap_edges);
     allocator.free(function.contract_regions);
     allocator.free(function.range_facts);

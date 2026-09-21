@@ -149,18 +149,27 @@ pub fn arithmeticDomainFindingDiagnostic(finding: []const u8) []const u8 {
     return "E_ARITH_POLICY_MIX";
 }
 
-pub fn operatorFindingDiagnostic(finding: []const u8) []const u8 {
-    if (std.mem.eql(u8, finding, "unsigned_negation")) return "E_UNSIGNED_NEGATION";
-    if (std.mem.eql(u8, finding, "bitwise_signed_operand")) return "E_BITWISE_SIGNED_OPERAND";
-    if (std.mem.eql(u8, finding, "bitwise_bool_operand")) return "E_BITWISE_BOOL_OPERAND";
-    if (std.mem.eql(u8, finding, "bitwise_pointer_operand")) return "E_BITWISE_POINTER_OPERAND";
-    if (std.mem.eql(u8, finding, "bool_operator_operand")) return "E_BOOL_OPERATOR_OPERAND";
-    if (std.mem.eql(u8, finding, "signed_unsigned_mix")) return "E_SIGNED_UNSIGNED_MIX";
-    if (std.mem.eql(u8, finding, "integer_promotion")) return "E_NO_IMPLICIT_INTEGER_PROMOTION";
-    if (std.mem.eql(u8, finding, "float_binary_conversion")) return "E_NO_IMPLICIT_CONVERSION";
-    if (std.mem.eql(u8, finding, "pointer_arith_single_object")) return "E_POINTER_ARITH_SINGLE_OBJECT";
-    if (std.mem.eql(u8, finding, "pointer_ordering")) return "E_POINTER_ORDERING";
-    return "E_OPERATOR_OPERAND";
+/// The diagnostic an operator-operand finding is reported as.
+///
+/// This replaced `operatorFindingDiagnostic`, an `eql` chain over the
+/// `operator_check` instruction's `detail` string whose final `return` was
+/// both the `operator_operand` finding and the answer for a spelling nothing
+/// produced. A total switch over the enum makes the two distinguishable and
+/// makes a new finding a compile error here rather than a silent fallback.
+pub fn operatorDiagnostic(finding: mir_model.OperatorFinding) []const u8 {
+    return switch (finding) {
+        .unsigned_negation => "E_UNSIGNED_NEGATION",
+        .bitwise_signed_operand => "E_BITWISE_SIGNED_OPERAND",
+        .bitwise_bool_operand => "E_BITWISE_BOOL_OPERAND",
+        .bitwise_pointer_operand => "E_BITWISE_POINTER_OPERAND",
+        .bool_operator_operand => "E_BOOL_OPERATOR_OPERAND",
+        .signed_unsigned_mix => "E_SIGNED_UNSIGNED_MIX",
+        .integer_promotion => "E_NO_IMPLICIT_INTEGER_PROMOTION",
+        .float_binary_conversion => "E_NO_IMPLICIT_CONVERSION",
+        .pointer_arith_single_object => "E_POINTER_ARITH_SINGLE_OBJECT",
+        .pointer_ordering => "E_POINTER_ORDERING",
+        .operator_operand => "E_OPERATOR_OPERAND",
+    };
 }
 
 pub fn addressDerefDiagnostic(kind: mir_model.AddressClass) []const u8 {

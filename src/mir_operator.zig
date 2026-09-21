@@ -6,6 +6,7 @@ const mir_type = @import("mir_type.zig");
 const mir_verify_util = @import("mir_verify_util.zig");
 
 const ArithmeticDomain = mir_verify_util.ArithmeticDomain;
+const OperatorFinding = mir_model.OperatorFinding;
 const TrapKind = mir_model.TrapKind;
 const ValueType = mir_model.ValueType;
 
@@ -151,24 +152,24 @@ pub fn bitwiseOperandAllowed(domain: ?ArithmeticDomain, ty: ValueType) bool {
     };
 }
 
-pub fn checkedIntegerBinaryFinding(left: ValueType, right: ValueType) ?[]const u8 {
+pub fn checkedIntegerBinaryFinding(left: ValueType, right: ValueType) ?OperatorFinding {
     if (!isCheckedIntegerType(left) or !isCheckedIntegerType(right)) return null;
     if (sameScalarTypeName(left, right)) return null;
     if ((isCheckedSignedType(left) and isCheckedUnsignedType(right)) or (isCheckedUnsignedType(left) and isCheckedSignedType(right))) {
-        return "signed_unsigned_mix";
+        return .signed_unsigned_mix;
     }
-    return "integer_promotion";
+    return .integer_promotion;
 }
 
-pub fn floatBinaryFinding(op: ast.BinaryOp, left: ValueType, right: ValueType) ?[]const u8 {
+pub fn floatBinaryFinding(op: ast.BinaryOp, left: ValueType, right: ValueType) ?OperatorFinding {
     if (!isFloatishType(left) and !isFloatishType(right)) return null;
     if (left == .unknown or right == .unknown or left == .never or right == .never) return null;
-    if (op == .mod and (isFloatType(left) or isFloatType(right))) return "operator_operand";
+    if (op == .mod and (isFloatType(left) or isFloatType(right))) return .operator_operand;
     if (isFloatishType(left) and isFloatishType(right)) {
-        if (isFloatType(left) and isFloatType(right) and !sameScalarTypeName(left, right)) return "float_binary_conversion";
+        if (isFloatType(left) and isFloatType(right) and !sameScalarTypeName(left, right)) return .float_binary_conversion;
         return null;
     }
-    return "float_binary_conversion";
+    return .float_binary_conversion;
 }
 
 fn isCheckedIntegerType(ty: ValueType) bool {

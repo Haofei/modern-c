@@ -15,6 +15,7 @@ const mir_model = @import("mir_model.zig");
 const mir_verify_util = @import("mir_verify_util.zig");
 
 const BuildOptions = mir_model.BuildOptions;
+const Function = mir_model.Function;
 const Module = mir_model.Module;
 
 const buildFromDecls = mir_facade.buildFromDecls;
@@ -716,6 +717,24 @@ fn appendExecutableObligations(
     }
 }
 
+/// The verification-fact rows for the refusals a function recorded.
+///
+/// Each row says what the old per-instruction walk said for the `*_check`
+/// instruction it replaced, but the finding name is `@tagName` over the typed
+/// value rather than the `detail` string it was read out of.
+fn appendFindingRows(allocator: std.mem.Allocator, function: Function, out: *std.ArrayList(u8)) !void {
+    for (function.findings) |finding| {
+        const source = sourcePointForSpanId(function, finding.typed_span_id) orelse return error.InvalidSpanReference;
+        switch (finding.kind) {
+            .operator => |operator| try out.print(
+                allocator,
+                "mir verify fn={s} pass=core finding={s} line={} column={}\n",
+                .{ function.name, @tagName(operator), source.line, source.column },
+            ),
+        }
+    }
+}
+
 pub fn appendVerificationFactsFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8)) !void {
     var mir = try buildFromDecls(allocator, decls);
     defer mir.deinit();
@@ -848,13 +867,6 @@ pub fn appendVerificationFactsFromMir(allocator: std.mem.Allocator, mir: Module,
                         .{ function.name, instruction.detail, source.line, source.column },
                     );
                 }
-                if (instruction.kind == .operator_check) {
-                    try out.print(
-                        allocator,
-                        "mir verify fn={s} pass=core finding={s} line={} column={}\n",
-                        .{ function.name, instruction.detail, source.line, source.column },
-                    );
-                }
                 if (irqContextCallFinding(mir, function, instruction)) |finding| {
                     try out.print(
                         allocator,
@@ -864,6 +876,7 @@ pub fn appendVerificationFactsFromMir(allocator: std.mem.Allocator, mir: Module,
                 }
             }
         }
+        try appendFindingRows(allocator, function, out);
         for (function.representation_facts) |fact| {
             const source = sourcePointForSpanId(function, fact.typed_span_id) orelse return error.InvalidMirRepresentationFacts;
             switch (fact.kind) {

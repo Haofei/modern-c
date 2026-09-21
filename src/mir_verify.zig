@@ -74,7 +74,7 @@ const isVoidLike = mir_type.isVoidLike;
 const moduleSymbolIdentityValid = mir_cleanup_cfg.moduleSymbolIdentityValid;
 const noOverflowUncheckedOp = mir_verify_util.noOverflowUncheckedOp;
 const nullabilityDiagnostic = mir_verify_util.nullabilityDiagnostic;
-const operatorFindingDiagnostic = mir_verify_util.operatorFindingDiagnostic;
+const operatorDiagnostic = mir_verify_util.operatorDiagnostic;
 const producerHasDominatingRepresentationCheck = mir_representation.producerHasDominatingCheck;
 const representationFactKind = mir_facade.representationFactKind;
 const resultFindingDiagnostic = mir_verify_util.resultFindingDiagnostic;
@@ -272,14 +272,6 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                         .{code},
                     );
                 }
-                if (instruction.kind == .operator_check) {
-                    const code = operatorFindingDiagnostic(instruction.detail);
-                    reporter.err(
-                        sourcePointSpan(source),
-                        "{s}: MIR verifier found invalid operator operand",
-                        .{code},
-                    );
-                }
                 if (irqContextCallFinding(mir, function, instruction)) |finding| {
                     const code = irqContextDiagnostic(finding);
                     reporter.err(
@@ -289,6 +281,29 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                     );
                 }
             }
+        }
+
+        reportFindings(function, reporter);
+    }
+}
+
+/// Render every refusal the builder recorded for this function.
+///
+/// This is the finding channel after it stopped being an instruction stream.
+/// A finding names its diagnostic by its own value: there is no `detail`
+/// string to classify, and no family-shaped `eql` chain with a fallback for a
+/// spelling nothing emits. What the walk still shares with the one it
+/// replaced is the source rule -- a span that does not resolve falls back to
+/// line 1, column 1, exactly as `instructionSourcePoint` did.
+fn reportFindings(function: Function, reporter: *diagnostics.Reporter) void {
+    for (function.findings) |finding| {
+        const source: SourcePoint = sourcePointForSpanId(function, finding.typed_span_id) orelse .{ .line = 1, .column = 1 };
+        switch (finding.kind) {
+            .operator => |operator| reporter.err(
+                sourcePointSpan(source),
+                "{s}: MIR verifier found invalid operator operand",
+                .{operatorDiagnostic(operator)},
+            ),
         }
     }
 }

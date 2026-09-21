@@ -4946,6 +4946,49 @@ pub const FfiParamContract = struct {
     address_class: ?AddressClass = null,
 };
 
+/// One operator-operand refusal. Each member is a diagnostic the verifier
+/// reports; `mir_verify_util.operatorDiagnostic` is the mapping, and it is a
+/// total switch rather than a chain of string comparisons with a fallback.
+pub const OperatorFinding = enum {
+    unsigned_negation,
+    bitwise_signed_operand,
+    bitwise_bool_operand,
+    bitwise_pointer_operand,
+    bool_operator_operand,
+    signed_unsigned_mix,
+    integer_promotion,
+    float_binary_conversion,
+    pointer_arith_single_object,
+    pointer_ordering,
+    /// The residual operand refusal: an operand the operator admits no rule
+    /// for. It was the `operatorFindingDiagnostic` fallback and is a member
+    /// here, because the builder emits it deliberately at three sites.
+    operator_operand,
+};
+
+/// What a refusal *is*, as a value rather than as a string.
+///
+/// One arm per finding family. A family whose diagnostic needs more than the
+/// finding itself carries that payload here -- a type to name, an address
+/// class to compare -- so the verifier never re-derives it from a spelling.
+pub const FindingKind = union(enum) {
+    operator: OperatorFinding,
+};
+
+/// A refusal the MIR builder recorded while lowering a body.
+///
+/// A finding is not an obligation the typed body carries: it says this
+/// function must not lower at all. So it lives on `Function`, beside the fact
+/// tables, and not on `ExecutableBody` -- a refused body is routinely
+/// incomplete, and would then have no typed node to hang the refusal on. The
+/// source identity is a `SpanId` in the owning function's span table, exactly
+/// as an instruction's is; coordinates are materialized only at the
+/// diagnostics boundary.
+pub const Finding = struct {
+    kind: FindingKind,
+    typed_span_id: SpanId = .invalid,
+};
+
 pub const Function = struct {
     name: []const u8,
     typed_def_id: DefId = .invalid,
@@ -4972,6 +5015,11 @@ pub const Function = struct {
     no_lang_trap: bool,
     irq_context: bool,
     blocks: []Block,
+    /// Refusals recorded while this body was built. A non-empty list means
+    /// the function cannot lower; the verifier renders each one as its
+    /// diagnostic. This is the channel that replaced the `*_check`
+    /// instructions whose `detail` string named the finding.
+    findings: []Finding = &.{},
     trap_edges: []TrapEdge,
     contract_regions: []ContractRegion,
     range_facts: []RangeFact,
@@ -5857,6 +5905,7 @@ pub const Module = struct {
                 self.allocator.free(block.successors);
             }
             self.allocator.free(function.blocks);
+            if (function.findings.len != 0) self.allocator.free(function.findings);
             self.allocator.free(function.trap_edges);
             self.allocator.free(function.contract_regions);
             self.allocator.free(function.range_facts);
