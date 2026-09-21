@@ -14377,6 +14377,12 @@ test "lower-c canonical ordinary defer with arguments ignores legacy argument fa
             break;
         }
     } else return error.TestUnexpectedResult;
+    for (function.executable_body.target_type_obligations) |*obligation| {
+        if (obligation.kind == .direct_call_argument and obligation.target_index == 0) {
+            obligation.target_index = 7;
+            break;
+        }
+    } else return error.TestUnexpectedResult;
     try mir.validateLoweringAdmission(module_mir);
 
     var output: std.ArrayList(u8) = .empty;

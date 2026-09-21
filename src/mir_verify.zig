@@ -1969,24 +1969,111 @@ fn instructionRequiresKnownLoweringType(instruction: Instruction) bool {
     };
 }
 
+/// A target-type fact names the typed obligation it describes, a row of
+/// `ExecutableBody.target_type_obligations`. One obligation, one fact, in
+/// both directions.
+///
+/// The obligation is a row in a list on the body rather than a field on a
+/// node, because one node owns several of them and a seventh of them own no
+/// node at all; `ExecutableTargetTypeObligation` records that measurement.
+///
+/// Everything `targetTypeFactAgreesWithInstruction` checked against the
+/// `target_type` instruction is recorded on the obligation, except the kind:
+/// that was `std.meta.stringToEnum` over `Instruction.detail`, and on the
+/// obligation it is already the enum. The result-type agreement moved with it
+/// as a `TypeId`; the fact's `ValueType` stays pinned, because
+/// `targetTypeFactTypedIdentitiesValid` compares it against the function's own
+/// type identity for that id.
+///
+/// `targetTypeSyntaxMatches` moved too, as the obligation's `target_type_id`
+/// and `aggregate_construction`, and is still checked separately so a fact
+/// whose target shape has gone stale is reported as `StaleMirTargetTypeFacts`
+/// rather than merely rejected.
+///
+/// The walk over `target_type` instructions remains only for a body the typed
+/// form does not represent; see `typedObligationsRepresented`.
 pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTargetTypeFacts, StaleMirTargetTypeFacts }!void {
     for (module.functions) |function| {
+        const body = &function.executable_body;
+        const typed = typedObligationsRepresented(module, function);
         for (function.target_type_facts) |fact| {
             if (!targetTypeFactTypedIdentitiesValid(module.signature_types, function, fact)) return error.InvalidMirTargetTypeFacts;
             if (!targetTypeFactFamilyValid(fact)) return error.InvalidMirTargetTypeFacts;
         }
-        for (function.blocks) |block| for (block.instructions) |instruction| {
-            const kind = targetTypeKindForInstruction(instruction) orelse continue;
-            if (countMatchingTargetTypeFacts(function, kind, instruction) != 1) {
-                if (hasStaleTargetTypeFact(function, kind, instruction)) return error.StaleMirTargetTypeFacts;
+        if (typed) {
+            for (body.target_type_obligations) |obligation| {
+                if (!targetTypeObligationOwnerValid(body, obligation)) return error.InvalidMirTargetTypeFacts;
+                if (countMatchingTargetTypeFactsForObligation(function, obligation) != 1) {
+                    if (hasStaleTargetTypeFactForObligation(function, obligation)) return error.StaleMirTargetTypeFacts;
+                    return error.InvalidMirTargetTypeFacts;
+                }
+            }
+        } else {
+            for (function.blocks) |block| for (block.instructions) |instruction| {
+                const kind = targetTypeKindForInstruction(instruction) orelse continue;
+                if (countMatchingTargetTypeFacts(function, kind, instruction) != 1) {
+                    if (hasStaleTargetTypeFact(function, kind, instruction)) return error.StaleMirTargetTypeFacts;
+                    return error.InvalidMirTargetTypeFacts;
+                }
+            };
+        }
+        for (function.target_type_facts) |fact| {
+            if (typed) {
+                if (mir_model.executableTargetTypeObligationCount(body, fact.typed_inst_id) != 1)
+                    return error.InvalidMirTargetTypeFacts;
+                const obligation = mir_model.executableTargetTypeObligation(body, fact.typed_inst_id) orelse
+                    return error.InvalidMirTargetTypeFacts;
+                if (!targetTypeFactAgreesWithObligation(fact, obligation)) return error.InvalidMirTargetTypeFacts;
+                if (!targetTypeSyntaxMatchesObligation(fact, obligation)) return error.StaleMirTargetTypeFacts;
+            } else if (countMatchingTargetTypeInstructions(function, fact) != 1) {
                 return error.InvalidMirTargetTypeFacts;
             }
-        };
-        for (function.target_type_facts) |fact| {
-            if (countMatchingTargetTypeInstructions(function, fact) != 1) return error.InvalidMirTargetTypeFacts;
             if (countMatchingTargetTypeFactsForFact(function, fact) != 1) return error.InvalidMirTargetTypeFacts;
         }
     }
+}
+
+/// An obligation that names an owning node must name one that exists. A
+/// seventh of them own no node -- see `ExecutableTargetTypeObligation` --
+/// and that is not an error, but a dangling `ExprId` is.
+fn targetTypeObligationOwnerValid(body: *const mir_model.ExecutableBody, obligation: mir_model.ExecutableTargetTypeObligation) bool {
+    if (!obligation.owner.isValid()) return true;
+    const index = obligation.owner.index();
+    return index < body.expressions.len and body.expressions[index].id.eql(obligation.owner);
+}
+
+/// Everything the fact and the obligation must agree about except the target
+/// shape, which is checked separately so a stale one is reported as stale.
+fn targetTypeFactAgreesWithObligation(fact: TargetTypeFact, obligation: mir_model.ExecutableTargetTypeObligation) bool {
+    if (!fact.typed_inst_id.isValid() or !fact.typed_inst_id.eql(obligation.id)) return false;
+    if (fact.kind != obligation.kind) return false;
+    if (fact.target_index != obligation.target_index) return false;
+    if (!fact.typed_target_owner_id.eql(obligation.target_owner_id)) return false;
+    if (!fact.typed_result_ty.eql(obligation.result_type_id)) return false;
+    if (!fact.typed_span_id.eql(obligation.span_id)) return false;
+    if (!fact.typed_callee_span_id.eql(obligation.callee_span_id)) return false;
+    return fact.typed_operand_value_id.eql(obligation.operand_value_id);
+}
+
+fn targetTypeSyntaxMatchesObligation(fact: TargetTypeFact, obligation: mir_model.ExecutableTargetTypeObligation) bool {
+    return obligation.target_type_id.isValid() and
+        fact.target_type_id.eql(obligation.target_type_id) and
+        fact.aggregate_construction == obligation.aggregate_construction;
+}
+
+fn countMatchingTargetTypeFactsForObligation(function: Function, obligation: mir_model.ExecutableTargetTypeObligation) usize {
+    var count: usize = 0;
+    for (function.target_type_facts) |fact| {
+        if (targetTypeFactAgreesWithObligation(fact, obligation) and targetTypeSyntaxMatchesObligation(fact, obligation)) count += 1;
+    }
+    return count;
+}
+
+fn hasStaleTargetTypeFactForObligation(function: Function, obligation: mir_model.ExecutableTargetTypeObligation) bool {
+    for (function.target_type_facts) |fact| {
+        if (targetTypeFactAgreesWithObligation(fact, obligation) and !targetTypeSyntaxMatchesObligation(fact, obligation)) return true;
+    }
+    return false;
 }
 
 fn targetTypeFactFamilyValid(fact: TargetTypeFact) bool {

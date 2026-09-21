@@ -5052,6 +5052,14 @@ pub const FunctionBuilder = struct {
     /// rather than an expression: a diverging explicit trap call. Keyed by
     /// block index, drained when the terminators are built.
     executable_terminator_call_targets: std.AutoHashMap(usize, mir_model.ExecutableCallTargetObligation),
+    /// Target-type obligations recorded for this body, in the order the
+    /// builder appends their facts. See `ExecutableTargetTypeObligation`.
+    executable_target_type_obligations: std.ArrayList(mir_model.ExecutableTargetTypeObligation),
+    /// The anchor each of those obligations is owned at, parallel to the list
+    /// above. Owners are resolved once the body is finished, because a typed
+    /// node is not always built before the instruction whose fact names it --
+    /// a `switch` subject and a `for` element are built after.
+    executable_target_type_owner_sources: std.ArrayList(SourcePoint),
     executable_for_each_terminators: std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator),
     executable_for_step_terminators: std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator),
     executable_boolean_branches: std.ArrayList(ExecutableBooleanBranch),
@@ -5141,6 +5149,10 @@ pub const FunctionBuilder = struct {
     // literal, so the inner literal has no node; this carries its source point
     // to the append so that node answers for both.
     executable_folded_operand_source: ?SourcePoint = null,
+    // One-shot owner anchor for the next target-type obligation, for the one
+    // fact recorded somewhere other than the node that owns it: a
+    // `direct_call_result` sits at the callee span, its node at the call.
+    executable_target_type_owner_source: ?SourcePoint = null,
     // Identity counter for resolved access facts, for the same reason: their
     // one-fact-per-access rule cannot be checked on a span that repeats.
     next_access_id: usize = 0,
@@ -5240,6 +5252,8 @@ pub const FunctionBuilder = struct {
             .executable_block_cleanup_entries = .empty,
             .executable_terminator_cleanups = std.AutoHashMap(usize, []const CleanupActionId).init(allocator),
             .executable_terminator_call_targets = std.AutoHashMap(usize, mir_model.ExecutableCallTargetObligation).init(allocator),
+            .executable_target_type_obligations = .empty,
+            .executable_target_type_owner_sources = .empty,
             .executable_for_each_terminators = std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator).init(allocator),
             .executable_for_step_terminators = std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator).init(allocator),
             .executable_boolean_branches = .empty,
@@ -5443,6 +5457,8 @@ pub const FunctionBuilder = struct {
             .executable_block_cleanup_entries = .empty,
             .executable_terminator_cleanups = std.AutoHashMap(usize, []const CleanupActionId).init(allocator),
             .executable_terminator_call_targets = std.AutoHashMap(usize, mir_model.ExecutableCallTargetObligation).init(allocator),
+            .executable_target_type_obligations = .empty,
+            .executable_target_type_owner_sources = .empty,
             .executable_for_each_terminators = std.AutoHashMap(usize, mir_model.ExecutableForEachTerminator).init(allocator),
             .executable_for_step_terminators = std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator).init(allocator),
             .executable_boolean_branches = .empty,
@@ -5530,6 +5546,8 @@ pub const FunctionBuilder = struct {
         self.executable_block_cleanup_entries.deinit(self.allocator);
         self.executable_terminator_cleanups.deinit();
         self.executable_terminator_call_targets.deinit();
+        self.executable_target_type_obligations.deinit(self.allocator);
+        self.executable_target_type_owner_sources.deinit(self.allocator);
         self.executable_for_each_terminators.deinit();
         self.executable_for_step_terminators.deinit();
         self.executable_boolean_branches.deinit(self.allocator);
@@ -5682,6 +5700,10 @@ pub const FunctionBuilder = struct {
         self.executable_terminator_cleanups = std.AutoHashMap(usize, []const CleanupActionId).init(self.allocator);
         self.executable_terminator_call_targets.deinit();
         self.executable_terminator_call_targets = std.AutoHashMap(usize, mir_model.ExecutableCallTargetObligation).init(self.allocator);
+        self.executable_target_type_obligations.deinit(self.allocator);
+        self.executable_target_type_obligations = .empty;
+        self.executable_target_type_owner_sources.deinit(self.allocator);
+        self.executable_target_type_owner_sources = .empty;
         self.executable_loop_targets.deinit(self.allocator);
         self.executable_loop_targets = .empty;
         self.executable_expr_by_source.deinit();
@@ -5983,6 +6005,12 @@ pub const FunctionBuilder = struct {
         self.executable_for_step_terminators.deinit();
         self.executable_for_step_terminators = std.AutoHashMap(usize, mir_model.ExecutableForStepTerminator).init(self.allocator);
 
+        // Before anything is drained: the resolution reads both the typed
+        // expression list and the rendezvous map.
+        self.resolveExecutableTargetTypeOwners();
+        self.executable_target_type_owner_sources.deinit(self.allocator);
+        self.executable_target_type_owner_sources = .empty;
+
         const parameters = try self.executable_parameters.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(parameters);
         const locals = try self.executable_locals.toOwnedSlice(self.allocator);
@@ -6024,6 +6052,8 @@ pub const FunctionBuilder = struct {
             for (owned_cleanup_action_id_slices) |ids| self.allocator.free(ids);
             self.allocator.free(owned_cleanup_action_id_slices);
         }
+        const target_type_obligations = try self.executable_target_type_obligations.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(target_type_obligations);
         self.executable_local_ids.deinit();
         self.executable_local_ids = std.StringHashMap(LocalId).init(self.allocator);
         self.executable_symbol_ids.deinit();
@@ -6054,6 +6084,7 @@ pub const FunctionBuilder = struct {
             .owned_bytes = owned_bytes,
             .owned_expr_id_slices = owned_expr_id_slices,
             .owned_cleanup_action_id_slices = owned_cleanup_action_id_slices,
+            .target_type_obligations = target_type_obligations,
         };
     }
 
@@ -13879,6 +13910,10 @@ pub const FunctionBuilder = struct {
                 if (direct_call) try self.addDropGlueCallOwnershipEvent(callee_name, node, expr.span);
                 if (direct_decl_summary) |summary| {
                     const result_ty = summary.return_type_expr orelse ast_query.simpleNameType("void", node.callee.*.span);
+                    // Recorded at the callee span, where the typed body holds
+                    // a `SymbolId`; the node that owns the obligation is the
+                    // call expression.
+                    self.executable_target_type_owner_source = self.sourcePoint(expr.span);
                     try self.appendOwnedTargetTypeFact(.direct_call_result, result_ty, summary.return_ty, node.callee.*.span, callee_name, null);
                     const fixed_arg_count = @min(node.args.len, summary.params.len);
                     for (node.args[0..fixed_arg_count], summary.params[0..fixed_arg_count], 0..) |arg, param, index| {
@@ -15969,6 +16004,7 @@ pub const FunctionBuilder = struct {
             const instructions = &self.blocks.items[self.current].instructions;
             instructions.items[instructions.items.len - 1].aggregate_construction = construction;
             self.target_type_facts.items[self.target_type_facts.items.len - 1].aggregate_construction = construction;
+            if (self.lastExecutableTargetTypeObligation()) |obligation| obligation.aggregate_construction = construction;
         }
         const call_kind: ?CallTargetKind = switch (kind) {
             .bind => .bind,
@@ -15998,6 +16034,67 @@ pub const FunctionBuilder = struct {
             .typed_inst_id = instructions.items[instructions.items.len - 1].typed_inst_id,
             .typed_span_id = typed_span_id,
         });
+        try self.recordExecutableTargetTypeObligation(.{
+            .id = instructions.items[instructions.items.len - 1].typed_inst_id,
+            .kind = kind,
+            .target_type_id = target_type_id,
+            .result_type_id = typed_result_ty,
+            .span_id = typed_span_id,
+        });
+    }
+
+    /// The typed expression that owns the obligation being recorded, or
+    /// `.invalid` when the typed form has no node for it.
+    ///
+    /// The anchor is the `target_type` instruction's own source, except where
+    /// a caller has said otherwise: a `direct_call_result` fact is recorded at
+    /// the *callee* span, where the typed body holds a `SymbolId` and not an
+    /// expression, so its owner is the call expression. That override is
+    /// one-shot and is consumed here.
+    ///
+    /// Every obligation at one anchor names the *same* node -- a cast's source
+    /// and target are two obligations on one expression -- so this is the
+    /// rendezvous map's answer, not a claim-the-first-unclaimed walk like the
+    /// families whose obligations are one per node.
+    fn takeExecutableTargetTypeOwnerSource(self: *FunctionBuilder) SourcePoint {
+        const source = self.executable_target_type_owner_source orelse self.last_inst_source;
+        self.executable_target_type_owner_source = null;
+        return source;
+    }
+
+    /// Resolve every recorded obligation's owner against the finished
+    /// rendezvous map. Deferred to here because a typed node is not always
+    /// built before the instruction whose fact names it: a `switch` subject
+    /// and a `for` element are realized after their `target_type` instruction
+    /// is emitted, so resolving at record time left 559 obligations orphaned
+    /// that in fact have a node.
+    fn resolveExecutableTargetTypeOwners(self: *FunctionBuilder) void {
+        for (
+            self.executable_target_type_obligations.items,
+            self.executable_target_type_owner_sources.items,
+        ) |*obligation, source| {
+            const id = self.executable_expr_by_source.get(source) orelse continue;
+            if (!id.isValid() or id.index() >= self.executable_expressions.items.len) continue;
+            obligation.owner = id;
+        }
+    }
+
+    fn recordExecutableTargetTypeObligation(
+        self: *FunctionBuilder,
+        obligation: mir_model.ExecutableTargetTypeObligation,
+    ) !void {
+        const source = self.takeExecutableTargetTypeOwnerSource();
+        if (!obligation.id.isValid()) return;
+        try self.executable_target_type_obligations.append(self.allocator, obligation);
+        try self.executable_target_type_owner_sources.append(self.allocator, source);
+    }
+
+    /// The obligation appended most recently, so the callers that patch the
+    /// fact they just appended patch the obligation beside it.
+    fn lastExecutableTargetTypeObligation(self: *FunctionBuilder) ?*mir_model.ExecutableTargetTypeObligation {
+        const items = self.executable_target_type_obligations.items;
+        if (items.len == 0) return null;
+        return &items[items.len - 1];
     }
 
     fn structLiteralConstructionKind(self: *FunctionBuilder, target_ty: ast.TypeExpr) ?AggregateConstructionKind {
@@ -16027,6 +16124,15 @@ pub const FunctionBuilder = struct {
             .target_index = target_index,
             .typed_target_owner_id = typed_target_owner_id,
         });
+        try self.recordExecutableTargetTypeObligation(.{
+            .id = instructions.items[instructions.items.len - 1].typed_inst_id,
+            .kind = kind,
+            .target_type_id = target_type_id,
+            .result_type_id = typed_result_ty,
+            .span_id = typed_span_id,
+            .target_index = target_index,
+            .target_owner_id = typed_target_owner_id,
+        });
     }
 
     fn appendIndirectCallArgumentFact(self: *FunctionBuilder, target_ty: ast.TypeExpr, span: ast.Span, operand_name: []const u8, callee_place: []const u8, callee_span_id: SpanId, index: usize) !void {
@@ -16038,6 +16144,10 @@ pub const FunctionBuilder = struct {
         instructions.items[instructions.items.len - 1].typed_operand_value_id = operand_id;
         self.target_type_facts.items[self.target_type_facts.items.len - 1].typed_callee_span_id = callee_span_id;
         self.target_type_facts.items[self.target_type_facts.items.len - 1].typed_operand_value_id = operand_id;
+        if (self.lastExecutableTargetTypeObligation()) |obligation| {
+            obligation.callee_span_id = callee_span_id;
+            obligation.operand_value_id = operand_id;
+        }
     }
 
     fn appendDirectCallArgumentFact(self: *FunctionBuilder, target_ty: ast.TypeExpr, result_ty: ValueType, span: ast.Span, operand: ast.Expr, callee_name: []const u8, callee_span_id: SpanId, index: usize) !void {
@@ -16051,6 +16161,10 @@ pub const FunctionBuilder = struct {
         instructions.items[instructions.items.len - 1].typed_operand_value_id = operand_id orelse .invalid;
         self.target_type_facts.items[self.target_type_facts.items.len - 1].typed_callee_span_id = callee_span_id;
         self.target_type_facts.items[self.target_type_facts.items.len - 1].typed_operand_value_id = operand_id orelse .invalid;
+        if (self.lastExecutableTargetTypeObligation()) |obligation| {
+            obligation.callee_span_id = callee_span_id;
+            obligation.operand_value_id = operand_id orelse .invalid;
+        }
     }
 
     fn appendForElementTargetTypeFact(self: *FunctionBuilder, target_ty: ast.TypeExpr, result_ty: ValueType, span: ast.Span, binding_name: []const u8) !void {
@@ -16059,6 +16173,7 @@ pub const FunctionBuilder = struct {
         const instructions = &self.blocks.items[self.current].instructions;
         instructions.items[instructions.items.len - 1].typed_operand_value_id = binding_id;
         self.target_type_facts.items[self.target_type_facts.items.len - 1].typed_operand_value_id = binding_id;
+        if (self.lastExecutableTargetTypeObligation()) |obligation| obligation.operand_value_id = binding_id;
     }
 
     fn valueOptionalPayloadTargetType(self: *FunctionBuilder, target_ty: ast.TypeExpr, result_ty: ValueType) ?ast.TypeExpr {

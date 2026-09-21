@@ -348,6 +348,7 @@ pub const ExecutableParameter = mir_model.ExecutableParameter;
 pub const ExecutableLocalKind = mir_model.ExecutableLocalKind;
 pub const ExecutableLocalIdentity = mir_model.ExecutableLocalIdentity;
 pub const ExecutableExpression = mir_model.ExecutableExpression;
+pub const ExecutableTargetTypeObligation = mir_model.ExecutableTargetTypeObligation;
 pub const ExecutableAtomicOrdering = mir_model.ExecutableAtomicOrdering;
 pub const ExecutableMmioOrdering = mir_model.ExecutableMmioOrdering;
 pub const ExecutablePlaceStorage = mir_model.ExecutablePlaceStorage;

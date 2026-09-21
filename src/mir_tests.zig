@@ -4463,12 +4463,12 @@ test "MIR target-type admission rejects stale complete syntax" {
         break;
     } else return error.TestUnexpectedResult;
 
-    for (function.blocks) |*block| for (block.instructions) |*instruction| {
-        if (instruction.kind == .target_type and std.mem.eql(u8, instruction.detail, @tagName(.expression_result))) {
-            instruction.target_type_id = .invalid;
+    for (function.executable_body.target_type_obligations) |*obligation| {
+        if (obligation.kind == .expression_result) {
+            obligation.target_type_id = .invalid;
             break;
         }
-    };
+    } else return error.TestUnexpectedResult;
     try std.testing.expectError(error.StaleMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
 }
 
@@ -8879,6 +8879,30 @@ test "MIR rejects duplicate call target facts" {
     try std.testing.expectError(error.InvalidMirCallTargetFacts, mir.validateCallTargetFactsForLowering(typed_mir));
 }
 
+/// Append a copy of the first target-type obligation of `kind` under the
+/// identity `copy_id`, keeping everything else -- the same shape a copied AST
+/// node produces.
+fn cloneTargetTypeObligation(
+    function: *mir.Function,
+    allocator: std.mem.Allocator,
+    kind: mir.TargetTypeKind,
+    copy_id: mir.InstId,
+) !void {
+    const body = &function.executable_body;
+    for (body.target_type_obligations) |obligation| {
+        if (obligation.kind != kind) continue;
+        const obligations = try allocator.alloc(mir.ExecutableTargetTypeObligation, body.target_type_obligations.len + 1);
+        @memcpy(obligations[0..body.target_type_obligations.len], body.target_type_obligations);
+        var copy = obligation;
+        copy.id = copy_id;
+        obligations[body.target_type_obligations.len] = copy;
+        allocator.free(body.target_type_obligations);
+        body.target_type_obligations = obligations;
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 /// Append a copy of the typed expression carrying a call-target obligation,
 /// giving the copy `copy_id` as its own obligation. The copy keeps the
 /// original's span -- exactly what a copied AST node produces.
@@ -8962,8 +8986,8 @@ test "target type facts distinguish two targets that share one span" {
     try std.testing.expect(original_fact.?.typed_inst_id.isValid());
 
     const copy_inst_id = freshInstId(function);
-    const original_inst_id = try cloneInstructionWithInstId(function, std.testing.allocator, .target_type, "result_ok", copy_inst_id);
-    try std.testing.expect(original_inst_id.eql(original_fact.?.typed_inst_id));
+    const original_inst_id = original_fact.?.typed_inst_id;
+    try cloneTargetTypeObligation(function, typed_mir.allocator, .result_ok, copy_inst_id);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
 
     try duplicateTargetTypeFactOfKind(function, typed_mir.allocator, .result_ok);
@@ -8971,15 +8995,15 @@ test "target type facts distinguish two targets that share one span" {
     function.target_type_facts[copy_index].typed_inst_id = copy_inst_id;
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 
-    // Duplicate: both facts name one instruction.
+    // Duplicate: both facts name one obligation.
     function.target_type_facts[copy_index].typed_inst_id = original_inst_id;
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
 
     // Stale syntax under a correct identity is still reported as stale.
     function.target_type_facts[copy_index].typed_inst_id = copy_inst_id;
-    for (function.blocks) |*block| for (block.instructions) |*instruction| {
-        if (instruction.typed_inst_id.eql(copy_inst_id)) instruction.target_type_id = .invalid;
-    };
+    for (function.executable_body.target_type_obligations) |*obligation| {
+        if (obligation.id.eql(copy_inst_id)) obligation.target_type_id = .invalid;
+    }
     try std.testing.expectError(error.StaleMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
 
     // Absent identity fails closed.
@@ -9016,8 +9040,10 @@ test "const_get facts distinguish two accesses that share one span" {
     try cloneCallTargetObligationNode(function, typed_mir.allocator, call_copy_id);
     const base_copy_id = freshInstId(function);
     _ = try cloneInstructionWithInstId(function, std.testing.allocator, .target_type, "const_get_base", base_copy_id);
+    try cloneTargetTypeObligation(function, typed_mir.allocator, .const_get_base, base_copy_id);
     const result_copy_id = freshInstId(function);
     _ = try cloneInstructionWithInstId(function, std.testing.allocator, .target_type, "const_get_result", result_copy_id);
+    try cloneTargetTypeObligation(function, typed_mir.allocator, .const_get_result, result_copy_id);
 
     const facts = try std.testing.allocator.alloc(mir.ConstGetFact, 2);
     facts[0] = original_fact;
@@ -12957,10 +12983,12 @@ test "bind thunk facts distinguish two binds that share one span" {
     try std.testing.expect(original.typed_inst_id.isValid());
     try std.testing.expect(original.typed_target_type_inst_id.isValid());
 
+    // Two fresh identities. Neither copy adds an instruction any more -- both
+    // clone a typed obligation -- so the second cannot be read back off the
+    // stream and is taken one past the first.
     const target_type_copy_id = freshInstId(function);
-    const target_type_original_id = try cloneInstructionWithInstId(function, std.testing.allocator, .target_type, "bind", target_type_copy_id);
-    try std.testing.expect(target_type_original_id.eql(original.typed_target_type_inst_id));
-    const call_target_copy_id = freshInstId(function);
+    try cloneTargetTypeObligation(function, module_mir.allocator, .bind, target_type_copy_id);
+    const call_target_copy_id = mir.InstId.fromIndex(target_type_copy_id.index() + 1);
     const call_target_original_id = original.typed_inst_id;
     try cloneCallTargetObligationNode(function, module_mir.allocator, call_target_copy_id);
     try duplicateTargetTypeFactOfKind(function, module_mir.allocator, .bind);

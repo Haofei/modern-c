@@ -102,7 +102,7 @@ that the typed body does not represent as a node at all:
 | integer literal | `integer_literal_conversion`, agreeing on `detail` (the literal spelling) | **Done.** Joins `ExecutableExpression.literal_conversion`; the spelling agreement is gone. |
 | float literal | `expr` with `detail == "float"` | **Done.** Shares `ExecutableExpression.literal_conversion` with the integer family. |
 | representation | `representation_check` / `representation_use`, agreeing on `kind` and `detail` | No. |
-| target-type | `target_type`, agreeing on `detail` (the `TargetTypeKind` tag) | Not yet -- a node owns *several*, and 18% of them own no node. Measured; see below. |
+| target-type | `target_type`, agreeing on `detail` (the `TargetTypeKind` tag) | **Done.** Joins a row of `ExecutableBody.target_type_obligations`, which names its owning node; see below. |
 | call-target | `call_target` | **Done.** Joins `ExecutableExpression.call_target_obligation`, or `ExecutableTerminator.call_target_obligation` for a diverging explicit trap; see below. |
 | range | `unchecked_assume` inside a `no_overflow` contract region | No. |
 | access facts | `index` / `expr` | No. |
@@ -206,18 +206,12 @@ family owns its obligation (`mir_model.executableLiteralConversionIsFloat`,
 reading the literal payload), so each completeness walk skips the other
 family's obligations and a missing float fact stays a float refusal.
 
-### Note: what the target-type family measures at
+### Note: how the target-type family left the instruction stream
 
-The first three families -- bounds, integer literal, float literal -- landed
-on one shape: a single obligation per typed node, recorded by the builder
-where it already appends the fact. Before assuming the next two fit it, both
-were counted over every fixture in `tests/c_emit`, `tests/spec`, `tests/std`
-and `tests/exec`: 12,316 target-type facts over every function, and 377
-call-target facts over the functions
-`mir_verify.typedObligationsRepresented` admits. The call-target half of that
-measurement is now closed; its note follows this one.
-
-**target-type does not fit, for two independent reasons.**
+**It is the one family that did not fit the shape the first four took**, and
+it was measured before being converted: 12,316 target-type facts over every
+fixture in `tests/c_emit`, `tests/spec`, `tests/std` and `tests/exec`, 12,079
+of them in the functions `mir_verify.typedObligationsRepresented` admits.
 
 | Shape | Count | Share |
 |---|---|---|
@@ -226,26 +220,45 @@ measurement is now closed; its note follows this one.
 | **no typed expression at the fact's span at all** | 2,246 | 18% |
 | several typed expressions at the span | 628 | 5% |
 
-The 18% is not a long tail and not an artifact of unrepresented bodies:
-`expression_result` (1,336) and `direct_call_result` (774) are most of it, and
-`direct_call_result` is recorded at the *callee* span, where the typed body
-holds a `SymbolId` rather than an expression. There is no node there to carry
-anything, by construction.
+Both of the two problems are real, and the container answers them together:
 
-The 36% is the second reason, and it rules out the shape that worked three
-times: a single field cannot hold a *set*. `explicit_cast_source` and
-`explicit_cast_target` share one span, and the four `mmio_*` kinds share one
-span, so a node owns several target-type obligations and needs an owned list
-allocated and freed with the body (as `ExecutableBody.owned_operand_lists`
-already is), not a field.
+- **A node owns several.** A single field cannot hold a set.
+  `explicit_cast_source` and `explicit_cast_target` share one span, and the
+  four `mmio_*` kinds share one span.
+- **A tenth own no node at all**, so a slice hanging off each node cannot
+  hold them either.
 
-There is a third cost on top of the container. The target-type agreement is
-not one field: `targetTypeFactAgreesWithInstruction` checks kind,
-`target_index`, target owner, result type, span, callee span and operand
-identity, and `targetTypeSyntaxMatches` checks `target_type_id` and
-`aggregate_construction` separately so a stale target type can be *reported*
-as stale rather than merely rejected. Each one has to be recorded on the node
-or deliberately dropped, and `StaleMirTargetTypeFacts` is a refusal users see.
+So the container is one list on the body,
+`ExecutableBody.target_type_obligations`, allocated and freed with it exactly
+as `owned_expr_id_slices` is, and each row carries `owner: ExprId` -- the node
+that owns it, or `.invalid`. That is the ownership edge, in the direction that
+makes both shapes expressible at once.
+
+**Two of the three measured no-node families turned out to have nodes.** The
+final count is 1,223 of 12,079 (10%) with no owner, not 2,246 (18%):
+
+| Family | Facts | Where its node was |
+|---|---|---|
+| `direct_call_result` | 800 | The fact is recorded at the *callee* span, where the typed body holds a `SymbolId`. The node that owns the obligation is the *call* expression, so the builder anchors it there through a one-shot override. |
+| `switch_subject`, `inferred_local`, `if_let_subject`, `for_iterable`, `for_element` | 559 | The node exists but is built *after* the `target_type` instruction whose fact names it. Owners are therefore resolved once, at the end of `finishExecutableBody`, against the finished rendezvous map -- not at record time. |
+| `expression_result` and a small tail | 1,223 | Genuinely none: the typed form folds the expression into its parent (a `grouped`, a collapsed cast, a subexpression restructured into a statement). The body owns those obligations and no node does. |
+
+**What moved and what was dropped.** Everything
+`targetTypeFactAgreesWithInstruction` checked -- `target_index`, target owner,
+result type, span, callee span, operand identity -- is recorded on the
+obligation, and `targetTypeSyntaxMatches` moved with it as `target_type_id`
+plus `aggregate_construction`, still checked separately so a stale target
+shape is reported as `StaleMirTargetTypeFacts` rather than merely rejected.
+Two things did not survive as they were:
+
+- the kind agreement was `std.meta.stringToEnum(TargetTypeKind,
+  instruction.detail)`. On the obligation the kind is already the enum, so
+  the tag-string test is gone rather than restated.
+- `sameRepresentationValueType(fact.result_ty, instruction.result_ty)` is
+  dropped. The obligation records the result `TypeId` instead, and the fact's
+  `ValueType` stays pinned because `targetTypeFactTypedIdentitiesValid`
+  already compares it against the function's own type identity for that id --
+  so the same thing is proved once instead of twice, in the typed currency.
 
 ### Note: how the call-target family left the instruction stream
 

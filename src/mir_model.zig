@@ -2729,6 +2729,79 @@ pub fn executableCallTargetObligation(body: *const ExecutableBody, id: InstId) ?
     return found;
 }
 
+/// One target-type obligation carried by the typed body: at this point the
+/// program contextualizes a value to a declared target shape.
+///
+/// This family does not fit the single field the bounds, literal-conversion
+/// and call-target families use, for two measured reasons:
+///
+///  - **A node owns several.** `explicit_cast_source` and
+///    `explicit_cast_target` share one span, and the four `mmio_*` kinds share
+///    one span, so 4,400 of 12,079 obligations sit beside 1 to 5 others on one
+///    node. A field cannot hold a set.
+///  - **A sixth of them own no node at all.** 2,000 of 12,079 have no typed
+///    expression at their span: `expression_result` (1,185) over an expression
+///    the typed form folds away, and `direct_call_result` (768), which is
+///    recorded at the *callee* span where the typed body holds a `SymbolId`
+///    rather than an expression. `owner` is invalid for those: the body owns
+///    the obligation and no node does.
+///
+/// So the container is one list on the body -- allocated and freed with it,
+/// exactly as `owned_expr_id_slices` is -- and `owner` is the ownership edge
+/// rather than a slice hanging off each node.
+///
+/// Everything `targetTypeFactAgreesWithInstruction` used to check against the
+/// `target_type` instruction is recorded here instead, except the kind, which
+/// it recovered with `std.meta.stringToEnum` over `Instruction.detail`. That
+/// string classification is what the typed body exists to replace; on the
+/// obligation the kind is already the enum.
+pub const ExecutableTargetTypeObligation = struct {
+    /// Join key. A `TargetTypeFact` names this and nothing else; see
+    /// `BoundsFact.typed_inst_id` for why a span is not an identity.
+    id: InstId,
+    /// The typed expression that owns this obligation, or `.invalid` when no
+    /// node does.
+    owner: ExprId = .invalid,
+    kind: TargetTypeKind,
+    /// The declared target shape, kept beside the identity so a fact whose
+    /// target type has gone stale is *reported* as `StaleMirTargetTypeFacts`
+    /// rather than merely rejected. This is the half `targetTypeSyntaxMatches`
+    /// used to check.
+    target_type_id: SignatureTypeId = .invalid,
+    aggregate_construction: ?AggregateConstructionKind = null,
+    result_type_id: TypeId = .invalid,
+    span_id: SpanId = .invalid,
+    callee_span_id: SpanId = .invalid,
+    operand_value_id: ValueId = .invalid,
+    target_index: ?usize = null,
+    target_owner_id: SymbolId = .invalid,
+};
+
+/// How many typed target-type obligations carry `id`. The exactly-one
+/// invariant a `TargetTypeFact` must satisfy is stated over this count rather
+/// than over the `target_type` instruction it used to be counted against.
+pub fn executableTargetTypeObligationCount(body: *const ExecutableBody, id: InstId) usize {
+    if (!id.isValid()) return 0;
+    var count: usize = 0;
+    for (body.target_type_obligations) |obligation| {
+        if (obligation.id.eql(id)) count += 1;
+    }
+    return count;
+}
+
+/// The single typed target-type obligation named by `id`, or null when none
+/// or more than one carries it.
+pub fn executableTargetTypeObligation(body: *const ExecutableBody, id: InstId) ?ExecutableTargetTypeObligation {
+    if (!id.isValid()) return null;
+    var found: ?ExecutableTargetTypeObligation = null;
+    for (body.target_type_obligations) |obligation| {
+        if (!obligation.id.eql(id)) continue;
+        if (found != null) return null;
+        found = obligation;
+    }
+    return found;
+}
+
 pub const ExecutableBody = struct {
     complete: bool = true,
     incomplete_reason: ExecutableIncompleteReason = .none,
@@ -2761,6 +2834,10 @@ pub const ExecutableBody = struct {
     /// language limit inherited from call/asm inline storage.
     owned_expr_id_slices: []const []const ExprId = &.{},
     owned_cleanup_action_id_slices: []const []const CleanupActionId = &.{},
+    /// The target-type obligations this body carries; see
+    /// `ExecutableTargetTypeObligation` for why they are one list here rather
+    /// than a field on each node.
+    target_type_obligations: []ExecutableTargetTypeObligation = &.{},
 
     pub fn isComplete(self: *const ExecutableBody) bool {
         return self.complete;
@@ -2786,6 +2863,7 @@ pub const ExecutableBody = struct {
         if (self.owned_expr_id_slices.len != 0) allocator.free(self.owned_expr_id_slices);
         for (self.owned_cleanup_action_id_slices) |ids| allocator.free(ids);
         if (self.owned_cleanup_action_id_slices.len != 0) allocator.free(self.owned_cleanup_action_id_slices);
+        if (self.target_type_obligations.len != 0) allocator.free(self.target_type_obligations);
         self.* = .{};
     }
 };

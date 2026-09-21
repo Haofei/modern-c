@@ -152,7 +152,7 @@ Total codes: **277**.
 | `E_MAYBEUNINIT_RESOURCE_PAYLOAD` | MaybeUninit cannot store \`move\`/\`linear\`, \`region\`, or \`view struct\` payloads; use an ownership-aware resource container instead | `src/sema.zig:5122` |
 | `E_MC_VOID_POINTER_FFI` | use c_void for C opaque object pointers, not MC void | `src/sema.zig:4779` |
 | `E_MIR_ACCESS_FACT` | MIR verifier found duplicate resolved access fact<br>MIR verifier found index instruction without resolved access fact<br>MIR verifier found malformed resolved access fact | `src/mir_verify.zig:370`<br>`src/mir_verify.zig:383`<br>`src/mir_verify.zig:402` |
-| `E_MIR_CFG` | MIR verifier found malformed control-flow graph | `src/mir.zig:633` |
+| `E_MIR_CFG` | MIR verifier found malformed control-flow graph | `src/mir.zig:634` |
 | `E_MIR_IDENTITY` | MIR verifier found malformed instruction identity | `src/mir_verify.zig:356` |
 | `E_MIR_OWNERSHIP_EVENT` | MIR verifier found inconsistent ownership event sequence<br>MIR verifier found malformed ownership event | `src/mir_cleanup_cfg.zig:852`<br>`src/mir_cleanup_cfg.zig:863` |
 | `E_MIR_SOURCE_ID` | MIR verifier found malformed per-file source identity | `src/mir_verify.zig:344` |
