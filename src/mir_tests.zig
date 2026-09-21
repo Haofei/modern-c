@@ -3093,12 +3093,34 @@ test "MIR integer facts are the complete typed authority for integer literals" {
     try std.testing.expectError(error.InvalidMirIntegerFacts, mir.validateLoweringAdmission(invalid_inst));
 }
 
+/// Append a copy of the typed expression carrying a literal-conversion
+/// obligation, giving the copy `copy_id` as its own obligation. The copy keeps
+/// the original's span -- exactly what a copied AST node produces.
+fn cloneLiteralConversionNode(function: *mir.Function, allocator: std.mem.Allocator, copy_id: mir.InstId) !void {
+    const body = &function.executable_body;
+    for (body.expressions) |expression| {
+        if (!expression.literal_conversion.isValid()) continue;
+        const expressions = try allocator.alloc(mir.ExecutableExpression, body.expressions.len + 1);
+        @memcpy(expressions[0..body.expressions.len], body.expressions);
+        var copy = expression;
+        copy.id = mir.ExprId.fromIndex(body.expressions.len);
+        copy.inst_id = .invalid;
+        copy.literal_conversion.id = copy_id;
+        expressions[body.expressions.len] = copy;
+        allocator.free(body.expressions);
+        body.expressions = expressions;
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 test "integer facts distinguish two literal conversions that share one span" {
     // The async transform stamps the function-name span onto every node it
     // synthesizes, so a generated body routinely contains several literal
-    // conversions at one span. They are distinct instructions and must each
-    // keep their own fact; the join key is the instruction identity, not the
-    // span. This reproduces that shape without the transform.
+    // conversions at one span. They are distinct obligations and must each
+    // keep their own fact; the join key is the obligation identity recorded
+    // on the typed literal node, not the span. This reproduces that shape
+    // without the transform.
     const source =
         \\fn integer_value(other: u16) -> u8 {
         \\    let value: u8 = 7;
@@ -3113,36 +3135,9 @@ test "integer facts distinguish two literal conversions that share one span" {
     const function = functionByNameMut(&module_mir, "integer_value") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 1), function.integer_facts.len);
 
-    // Clone the conversion instruction and its fact, giving the copy a fresh
-    // instruction identity but the original's span -- exactly what a copied
-    // AST node produces.
     const original_fact = function.integer_facts[0];
-    var next_inst: usize = 0;
-    for (function.blocks) |block| {
-        for (block.instructions) |instruction| {
-            if (!instruction.typed_inst_id.isValid()) continue;
-            if (instruction.typed_inst_id.index() + 1 > next_inst) next_inst = instruction.typed_inst_id.index() + 1;
-        }
-    }
-    const copy_inst_id = mir.InstId.fromIndex(next_inst);
-
-    var cloned = false;
-    for (function.blocks) |*block| {
-        for (block.instructions) |instruction| {
-            if (instruction.kind != .integer_literal_conversion) continue;
-            const instructions = try std.testing.allocator.alloc(mir.Instruction, block.instructions.len + 1);
-            @memcpy(instructions[0..block.instructions.len], block.instructions);
-            var copy = instruction;
-            copy.typed_inst_id = copy_inst_id;
-            instructions[block.instructions.len] = copy;
-            std.testing.allocator.free(block.instructions);
-            block.instructions = instructions;
-            cloned = true;
-            break;
-        }
-        if (cloned) break;
-    }
-    try std.testing.expect(cloned);
+    const copy_inst_id = freshInstId(function);
+    try cloneLiteralConversionNode(function, std.testing.allocator, copy_inst_id);
 
     const facts = try std.testing.allocator.alloc(mir.IntegerFact, 2);
     facts[0] = original_fact;
@@ -3151,12 +3146,12 @@ test "integer facts distinguish two literal conversions that share one span" {
     std.testing.allocator.free(function.integer_facts);
     function.integer_facts = facts;
 
-    // Same span, same type, same literal, two instructions: admitted, because
-    // each fact names exactly one instruction by identity.
+    // Same span, same type, same literal, two typed obligations: admitted,
+    // because each fact names exactly one of them by identity.
     try mir.validateLoweringAdmission(module_mir);
 
     // The exactly-one invariant is unchanged: pointing both facts at the same
-    // instruction is still a duplicate.
+    // obligation is still a duplicate, and leaves the copy with no fact.
     function.integer_facts[1].typed_inst_id = original_fact.typed_inst_id;
     try std.testing.expectError(error.InvalidMirIntegerFacts, mir.validateLoweringAdmission(module_mir));
 }

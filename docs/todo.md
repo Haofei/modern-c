@@ -99,7 +99,7 @@ that the typed body does not represent as a node at all:
 |---|---|---|
 | bounds | `cmp_bounds` | **Done.** Joins `index.bounds_obligation` / `range_slice.bounds_obligation` on the typed node; see below. |
 | const_get | `index` with `detail == "const_get"` | No. Also still a `detail` string test. |
-| integer literal | `integer_literal_conversion`, agreeing on `detail` (the literal spelling) | No. |
+| integer literal | `integer_literal_conversion`, agreeing on `detail` (the literal spelling) | **Done.** Joins `ExecutableExpression.literal_conversion`; the spelling agreement is gone. |
 | float literal | `expr` with `detail == "float"` | No. |
 | representation | `representation_check` / `representation_use`, agreeing on `kind` and `detail` | No. |
 | target-type | `target_type`, agreeing on `detail` (the `TargetTypeKind` tag) | No. |
@@ -161,6 +161,42 @@ not block canonical lowering -- `lower-c canonical executable body does not
 depend on legacy bounds facts` is that contract -- and requiring a fact per
 obligation would make the legacy table load-bearing again, which is the
 opposite of the goal.
+
+### Note: what a literal-conversion obligation records, and why not the node's type
+
+The integer family looked like it needed nothing but a pointer from the fact
+to the typed literal node. It needed one more thing, and the reason is worth
+keeping.
+
+`IntegerFact` used to agree with its `integer_literal_conversion` instruction
+about the *target type* (`fact.target_type_id` against
+`Instruction.typed_result_ty`), and that agreement is what the stale-fact
+tests -- `lower-c rejects prebuilt MIR with stale integer facts` and its LLVM
+twin -- actually exercise. The obvious typed replacement is the literal node's
+own `type_id`. Measured, that is wrong: in `return x[1]` the conversion is
+recorded at the statement's target type (`u32`) while the typed operand node
+is `usize`, so the node's type would not disagree with a fact retargeted at
+another type. Tried it; it red-lined most of `tests/c_emit`.
+
+So the obligation is a pair, not an identity:
+`ExecutableExpression.literal_conversion` is
+`{ id: InstId, target_type_id: TypeId }`, both recorded by the builder at the
+point it appends the fact. The type is part of what the node owns, which is
+also the honest description -- the obligation *is* "this literal is
+contextualized to T".
+
+Two mechanics worth recording:
+
+- The lookup is the rendezvous map (`executable_expr_by_source`) first, then a
+  span scan. A negated literal is folded: `-1` becomes one typed
+  `signed_integer` node spanning the whole unary while the fact is recorded at
+  the inner literal, and the map is the only place that correspondence is
+  written down. The span scan behind it is what keeps two literals at one span
+  claiming their own nodes.
+- The spelling agreement (`IntegerFact.literal` against `Instruction.detail`)
+  is dropped rather than restated. It was the string classification the typed
+  body exists to replace, and the identity plus the target type is the whole
+  content of the fact.
 
 ### Note: `index` over a slice of pointers is not a `supportsType` gap
 

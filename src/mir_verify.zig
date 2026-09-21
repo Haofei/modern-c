@@ -677,13 +677,48 @@ pub fn validateRepresentationFactsForLowering(module: Module) error{InvalidMirRe
     }
 }
 
+/// An integer fact names the typed literal node its conversion belongs to:
+/// `ExecutableExpression.literal_conversion`. One node, one fact, in both
+/// directions -- the builder records the obligation where it appends the
+/// fact, so a fact deleted from the table leaves an obligation no fact names
+/// and is caught.
+///
+/// The fact no longer agrees with anything about the literal's *spelling*.
+/// That agreement compared `IntegerFact.literal` against `Instruction.detail`,
+/// which is the string classification the typed body exists to replace; the
+/// authority is the identity plus the target type, both of which are checked.
+///
+/// The walk over `integer_literal_conversion` instructions remains only for a
+/// body the typed form does not represent; see `typedObligationsRepresented`.
 pub fn validateIntegerFactsForLowering(module: Module) error{InvalidMirIntegerFacts}!void {
     for (module.functions) |function| {
+        const body = &function.executable_body;
+        const typed = typedObligationsRepresented(module, function);
         for (function.integer_facts) |fact| {
             if (!integerFactTypedIdentitiesValid(function, fact)) return error.InvalidMirIntegerFacts;
-            const instruction_count = countMatchingIntegerInstructions(function, fact);
-            const fact_count = countMatchingIntegerFacts(function, fact);
-            if (instruction_count != 1 or fact_count != 1) return error.InvalidMirIntegerFacts;
+            if (countMatchingIntegerFacts(function, fact) != 1) return error.InvalidMirIntegerFacts;
+            if (typed) {
+                if (mir_model.executableLiteralConversionCount(body, fact.typed_inst_id) != 1)
+                    return error.InvalidMirIntegerFacts;
+                // The obligation records the type the conversion produces, so
+                // a fact retargeted at another type disagrees with the node.
+                // This is what replaces the agreement the fact used to hold
+                // with `Instruction.typed_result_ty`.
+                const node = mir_model.executableLiteralConversionNode(body, fact.typed_inst_id) orelse
+                    return error.InvalidMirIntegerFacts;
+                if (!node.literal_conversion.target_type_id.eql(fact.target_type_id))
+                    return error.InvalidMirIntegerFacts;
+            } else if (countMatchingIntegerInstructions(function, fact) != 1) {
+                return error.InvalidMirIntegerFacts;
+            }
+        }
+        if (typed) {
+            for (body.expressions) |expression| {
+                if (!expression.literal_conversion.isValid()) continue;
+                if (countIntegerFactsForConversion(function, expression.literal_conversion.id) != 1)
+                    return error.InvalidMirIntegerFacts;
+            }
+            continue;
         }
         for (function.blocks) |block| {
             for (block.instructions) |instruction| {
@@ -692,6 +727,14 @@ pub fn validateIntegerFactsForLowering(module: Module) error{InvalidMirIntegerFa
             }
         }
     }
+}
+
+fn countIntegerFactsForConversion(function: Function, id: mir_model.InstId) usize {
+    var count: usize = 0;
+    for (function.integer_facts) |fact| {
+        if (fact.typed_inst_id.eql(id)) count += 1;
+    }
+    return count;
 }
 
 pub fn validateFloatFactsForLowering(module: Module) error{InvalidMirFloatFacts}!void {
@@ -749,7 +792,7 @@ pub fn validateRangeFactsForLowering(module: Module) error{InvalidMirRangeFacts}
 pub fn validateBoundsFactsForLowering(module: Module) error{InvalidMirBoundsFacts}!void {
     for (module.functions) |function| {
         const body = &function.executable_body;
-        const typed = boundsObligationsRepresented(module, function);
+        const typed = typedObligationsRepresented(module, function);
         for (function.bounds_facts) |fact| {
             if (!boundsFactTypedIdentityValid(function, fact)) return error.InvalidMirBoundsFacts;
             if (countMatchingBoundsFacts(function, fact) != 1) return error.InvalidMirBoundsFacts;
@@ -775,11 +818,11 @@ pub fn validateBoundsFactsForLowering(module: Module) error{InvalidMirBoundsFact
     }
 }
 
-/// Does this function's typed body carry the bounds obligations its checks
-/// own? A body the builder stopped partway through, an `extern` declaration
-/// and a global initializer's pseudo-callable do not, and are the only shapes
-/// still verified against the instruction stream.
-fn boundsObligationsRepresented(module: Module, function: Function) bool {
+/// Does this function's typed body carry the obligations its checks own? A
+/// body the builder stopped partway through, an `extern` declaration and a
+/// global initializer's pseudo-callable do not, and are the only shapes still
+/// verified against the instruction stream.
+fn typedObligationsRepresented(module: Module, function: Function) bool {
     const body = &function.executable_body;
     if (!body.isComplete() or function.is_extern or executableBodyIsEmpty(body)) return false;
     return !functionIsGlobalInitializer(module, function);
@@ -2076,7 +2119,8 @@ fn isIntegerLiteralConversionInstruction(instruction: Instruction) bool {
 }
 
 /// A fact describes an instruction when it names it by identity and still
-/// agrees with it about type and literal.
+/// agrees with it about the target type. Used only for the bodies the typed
+/// form does not represent; see `validateIntegerFactsForLowering`.
 ///
 /// The identity, not the span, is the join key. A span is not unique: the
 /// async transform stamps one function-name span onto every node it
@@ -2085,8 +2129,7 @@ fn isIntegerLiteralConversionInstruction(instruction: Instruction) bool {
 fn integerFactMatchesInstruction(fact: IntegerFact, instruction: Instruction) bool {
     return fact.typed_inst_id.isValid() and
         fact.typed_inst_id.eql(instruction.typed_inst_id) and
-        fact.target_type_id.eql(instruction.typed_result_ty) and
-        std.mem.eql(u8, fact.literal, instruction.detail);
+        fact.target_type_id.eql(instruction.typed_result_ty);
 }
 
 fn countMatchingIntegerInstructions(function: Function, fact: IntegerFact) usize {

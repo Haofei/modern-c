@@ -1331,6 +1331,14 @@ pub const ExecutableExpression = struct {
     /// kinds a complete body must realize, and `mir_verify` proves the join
     /// is a total, single-valued function on exactly those.
     inst_id: InstId = .invalid,
+    /// The integer-literal conversion obligation this node owns, or an
+    /// invalid one when this node is not a contextualized integer literal.
+    ///
+    /// It is a separate field from `inst_id` because the conversion is not
+    /// the instruction this node realizes: the builder emits an
+    /// `integer_literal_conversion` *and* the literal's own `expr`
+    /// instruction, and `inst_id` names the second.
+    literal_conversion: ExecutableLiteralConversion = .{},
     span_id: SpanId = .invalid,
     result_ty: ValueType,
     type_id: TypeId = .invalid,
@@ -2528,6 +2536,52 @@ pub fn executableExpressionForInstruction(body: *const ExecutableBody, inst_id: 
         if (expression.inst_id.eql(inst_id)) return expression;
     }
     return null;
+}
+
+/// An integer-literal conversion obligation carried by a typed node: this
+/// literal is contextualized to `target_type_id`.
+///
+/// The target type is part of the obligation rather than being recovered from
+/// the node's own `type_id`, because the two are genuinely different answers.
+/// `x[1]` converts its literal at the *statement's* target type while the
+/// typed operand node is `usize`, so the node's type would not catch a fact
+/// retargeted at the wrong type -- which is the whole content of the
+/// agreement this replaces.
+pub const ExecutableLiteralConversion = struct {
+    /// Join key. An `IntegerFact` names this and nothing else; see
+    /// `BoundsFact.typed_inst_id` for why a span is not an identity.
+    id: InstId = .invalid,
+    target_type_id: TypeId = .invalid,
+
+    pub fn isValid(self: ExecutableLiteralConversion) bool {
+        return self.id.isValid();
+    }
+};
+
+/// How many typed nodes carry `id` as their integer-literal conversion
+/// obligation. The exactly-one invariant an `IntegerFact` must satisfy is
+/// stated over this count rather than over the `integer_literal_conversion`
+/// instruction it used to be counted against.
+pub fn executableLiteralConversionCount(body: *const ExecutableBody, id: InstId) usize {
+    if (!id.isValid()) return 0;
+    var count: usize = 0;
+    for (body.expressions) |expression| {
+        if (expression.literal_conversion.id.eql(id)) count += 1;
+    }
+    return count;
+}
+
+/// The single typed node carrying `id` as its literal-conversion obligation,
+/// or `null` when no node or more than one does.
+pub fn executableLiteralConversionNode(body: *const ExecutableBody, id: InstId) ?ExecutableExpression {
+    if (!id.isValid()) return null;
+    var found: ?ExecutableExpression = null;
+    for (body.expressions) |expression| {
+        if (!expression.literal_conversion.id.eql(id)) continue;
+        if (found != null) return null;
+        found = expression;
+    }
+    return found;
 }
 
 /// A bounds obligation carried by a typed node.

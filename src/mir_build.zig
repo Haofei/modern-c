@@ -16640,6 +16640,46 @@ pub const FunctionBuilder = struct {
             .typed_inst_id = self.last_inst_id,
             .typed_span_id = try self.internSpanId(source),
         });
+        try self.recordExecutableLiteralConversion(span, .{
+            .id = self.last_inst_id,
+            .target_type_id = try self.internTypeId(target_ty),
+        });
+    }
+
+    /// Record the literal-conversion obligation on the typed literal node
+    /// built from the same source literal, so an `IntegerFact` joins a node
+    /// in `ExecutableBody` rather than an `integer_literal_conversion`
+    /// instruction the typed body does not represent.
+    ///
+    /// The rendezvous map answers first because a negated literal is folded:
+    /// `-1` is one typed `signed_integer` node spanning the whole unary, while
+    /// the fact is recorded at the inner literal, and the map is what records
+    /// that correspondence. Failing that, the first unclaimed literal at this
+    /// span is this conversion's, so two literals that share a span each claim
+    /// their own node, exactly as two bounds checks at one span do.
+    fn recordExecutableLiteralConversion(
+        self: *FunctionBuilder,
+        span: ast.Span,
+        conversion: mir_model.ExecutableLiteralConversion,
+    ) !void {
+        if (!conversion.isValid()) return;
+        const source = self.sourcePoint(span);
+        if (self.executable_expr_by_source.get(source)) |id| {
+            if (id.isValid() and id.index() < self.executable_expressions.items.len) {
+                const node = &self.executable_expressions.items[id.index()];
+                if (node.operation == .literal and !node.literal_conversion.isValid()) {
+                    node.literal_conversion = conversion;
+                    return;
+                }
+            }
+        }
+        const span_id = try self.internSpanId(source);
+        for (self.executable_expressions.items) |*expression| {
+            if (!expression.span_id.eql(span_id) or expression.literal_conversion.isValid()) continue;
+            if (expression.operation != .literal) continue;
+            expression.literal_conversion = conversion;
+            return;
+        }
     }
 
     /// Record the float literal fact for the instruction just emitted. The

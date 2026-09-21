@@ -76,7 +76,7 @@ Not yet typed — the honest list:
   | Family | Typed obligation it names | Verifier reads |
   |---|---|---|
   | bounds | `index.bounds_obligation`, `range_slice.bounds_obligation`, and the same field on an `index` place projection | the typed body |
-  | integer literal | -- | the instruction stream |
+  | integer literal | `ExecutableExpression.literal_conversion` (identity plus the target type) | the typed body |
   | float literal | -- | the instruction stream |
   | target-type | -- | the instruction stream |
   | call-target | -- | the instruction stream |
