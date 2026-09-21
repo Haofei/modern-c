@@ -95,9 +95,9 @@ Surveyed all of them before converting any, because the first one attempted
 any of them.** Every one keys on a checking or literal-conversion instruction
 that the typed body does not represent as a node at all:
 
-| Family | Instruction kind its fact joins on | Joinable? |
+| Family | Instruction kind its fact joins on | Joins a typed node? |
 |---|---|---|
-| bounds | `cmp_bounds` | No. Attempted and reverted; see below. |
+| bounds | `cmp_bounds` | **Done.** Joins `index.bounds_obligation` / `range_slice.bounds_obligation` on the typed node; see below. |
 | const_get | `index` with `detail == "const_get"` | No. Also still a `detail` string test. |
 | integer literal | `integer_literal_conversion`, agreeing on `detail` (the literal spelling) | No. |
 | float literal | `expr` with `detail == "float"` | No. |
@@ -119,34 +119,48 @@ instruction-scoped fact tables into typed nodes -- the *next* P0 bullet -- is
 what unblocks this one, not the other way round. The two ordered bullets
 should be swapped.
 
-### Note: the bounds family cannot leave the instruction stream yet
+### Note: how the bounds family left the instruction stream
 
-Attempted and reverted, measured rather than assumed. `validateBoundsFactsForLowering`
-was rewritten to count a fact's checked access in the `ExecutableBody` instead
-of counting `cmp_bounds` instructions by `detail` string. Two things came out:
+The blocker was real and is closed. `cmp_bounds` is still not a joinable
+instruction kind and still has no typed node -- but it does not need one. The
+obligation it carries is now *recorded on the node that owns it*:
+`ExecutableExpression.Operation.index.bounds_obligation`,
+`range_slice.bounds_obligation`, and the same field on an `index` projection
+of an `ExecutablePlace`. The builder sets it where it already appends the
+`BoundsFact`, so both name one identity, and
+`mir_model.executableBoundsObligationCount` is where the count is taken.
 
-- The join key is not the node's own span. A bounds fact keys on the same span
-  the resolved access fact uses, and that is *not the same span for both
-  kinds*: an index keys on its **operand** (`i` in `a[i]`, matching
-  `AccessFact.index.index_span_id`), a range slice on the **whole access**
-  (`AccessFact.range_slice.typed_span_id`). Keying an index on its own node
-  span silently collapses distinct checks. Fixing that took the failure count
-  from 9 tests to 2.
-- The remaining 2 are the real blocker, and `bounds facts distinguish two
-  checks that share one span` is the one that names it. **`cmp_bounds` is not
-  a joinable instruction kind.** It is not in
-  `mir_model.instructionJoinsExecutableBody`, and it has no typed node at all:
-  the typed body carries the obligation as `checked: bool` on the `index`
-  expression or the `index` place projection, not as a separate check node. So
-  two `cmp_bounds` checks at one span are one typed node, and the
-  exactly-one-fact-per-check rule -- which is the whole point of the
-  invariant -- cannot be stated over the typed body.
+That answers the two measurements the earlier attempt produced:
 
-What this family needs first is a typed node for the check, or a bounds
-obligation identity on the index node that a fact can name. Until then the
-legacy walk stays. The typed-body walk is strictly stronger in one respect
-worth keeping when that lands: it sees `checked`, so an elided bound no longer
-looks like a checked one, which the `detail` string never distinguished.
+- The span problem disappears rather than being fixed. Nothing keys on a span
+  any more: an index fact and a range-slice fact name obligation identities,
+  not the operand span or the whole-access span, so the two spellings no
+  longer have to be told apart. `BoundsFact.typed_span_id` stays, still keyed
+  the old way, but only for the resolved-access join and for diagnostics.
+- Two checks at one span stay distinct because each claims its own typed node.
+  `recordExecutableBoundsObligation` claims the first *unclaimed* checked
+  obligation at that access span, so a second check at the same span takes the
+  second node.
+
+The typed walk is also strictly stronger in the way the earlier note
+predicted: it sees `checked`, so an elided bound is not mistaken for a checked
+one, which the `detail` string never distinguished.
+
+What still reads the instruction stream, and why: a body the typed form does
+not represent -- an incomplete body (the builder stopped partway, so there is
+no typed node to carry the obligation), an `extern` declaration, and a global
+initializer's pseudo-callable, which is an expression compiled with a function
+body's checks rather than a statement sequence. `boundsObligationsRepresented`
+in `mir_verify.zig` is that predicate, and those three shapes are the only
+callers of `countMatchingBoundsInstructions` left.
+
+One direction of the invariant is deliberately weaker than "exactly one":
+an obligation is named by *at most* one fact, not exactly one. The executable
+body already owns complete trap-edge validation, so a missing legacy fact does
+not block canonical lowering -- `lower-c canonical executable body does not
+depend on legacy bounds facts` is that contract -- and requiring a fact per
+obligation would make the legacy table load-bearing again, which is the
+opposite of the goal.
 
 ### Note: `index` over a slice of pointers is not a `supportsType` gap
 

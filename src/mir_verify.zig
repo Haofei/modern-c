@@ -727,28 +727,77 @@ pub fn validateRangeFactsForLowering(module: Module) error{InvalidMirRangeFacts}
     }
 }
 
-/// A bounds fact names its `cmp_bounds` instruction by identity and the
-/// checked access by the operand's canonical SpanId. The executable body
-/// already owns complete trap-edge validation, so a missing legacy fact does
-/// not block canonical lowering; when a fact is present, admission requires it
-/// to name exactly one bounds-check instruction and exactly one resolved
-/// access fact, and to be that instruction's only fact.
+/// A bounds fact names the typed bounds obligation its check realizes, and
+/// the checked access by the operand's canonical SpanId.
+///
+/// The obligation is a field on the typed node -- `index.bounds_obligation`,
+/// `range_slice.bounds_obligation`, or the same field on an `index` place
+/// projection -- so the exactly-one rule is stated over `ExecutableBody`: a
+/// fact names exactly one typed obligation, and an obligation is named by at
+/// most one fact. Two checks that share a source span stay distinct because
+/// each claims its own typed node.
+///
+/// The reverse direction is deliberately "at most one" rather than "exactly
+/// one": the executable body already owns complete trap-edge validation, so a
+/// missing legacy fact does not block canonical lowering, and requiring one
+/// per obligation would make the legacy table load-bearing again.
+///
+/// The walk over `cmp_bounds` instructions remains only for a body the typed
+/// form does not represent: an incomplete body, an `extern` declaration, and
+/// a global initializer's pseudo-callable, which is an expression rather than
+/// a statement sequence and has no typed body to carry the obligation.
 pub fn validateBoundsFactsForLowering(module: Module) error{InvalidMirBoundsFacts}!void {
     for (module.functions) |function| {
+        const body = &function.executable_body;
+        const typed = boundsObligationsRepresented(module, function);
         for (function.bounds_facts) |fact| {
             if (!boundsFactTypedIdentityValid(function, fact)) return error.InvalidMirBoundsFacts;
             if (countMatchingBoundsFacts(function, fact) != 1) return error.InvalidMirBoundsFacts;
-            if (countMatchingBoundsInstructions(function, fact) != 1) return error.InvalidMirBoundsFacts;
+            if (typed) {
+                if (mir_model.executableBoundsObligationCount(body, fact.typed_inst_id, fact.kind) != 1)
+                    return error.InvalidMirBoundsFacts;
+            } else if (countMatchingBoundsInstructions(function, fact) != 1) {
+                return error.InvalidMirBoundsFacts;
+            }
             if (countMatchingBoundsAccessFacts(function, fact) != 1) return error.InvalidMirBoundsFacts;
         }
+        if (!typed) continue;
+        for (body.expressions) |expression| {
+            const obligation = mir_model.executableExpressionBoundsObligation(expression) orelse continue;
+            if (countBoundsFactsForObligation(function, obligation) > 1) return error.InvalidMirBoundsFacts;
+        }
+        for (body.places) |place| {
+            for (place.projections[0..place.projection_count]) |projection| {
+                const obligation = mir_model.executablePlaceBoundsObligation(projection) orelse continue;
+                if (countBoundsFactsForObligation(function, obligation) > 1) return error.InvalidMirBoundsFacts;
+            }
+        }
     }
+}
+
+/// Does this function's typed body carry the bounds obligations its checks
+/// own? A body the builder stopped partway through, an `extern` declaration
+/// and a global initializer's pseudo-callable do not, and are the only shapes
+/// still verified against the instruction stream.
+fn boundsObligationsRepresented(module: Module, function: Function) bool {
+    const body = &function.executable_body;
+    if (!body.isComplete() or function.is_extern or executableBodyIsEmpty(body)) return false;
+    return !functionIsGlobalInitializer(module, function);
+}
+
+fn countBoundsFactsForObligation(function: Function, obligation: mir_model.ExecutableBoundsObligation) usize {
+    var count: usize = 0;
+    for (function.bounds_facts) |fact| {
+        if (fact.kind == obligation.kind and fact.typed_inst_id.eql(obligation.id)) count += 1;
+    }
+    return count;
 }
 
 fn boundsFactTypedIdentityValid(function: Function, fact: BoundsFact) bool {
     return fact.typed_inst_id.isValid() and spanIdValid(function, fact.typed_span_id);
 }
 
-/// One bounds check, one fact. Counted on the instruction identity rather than
+/// One bounds check, one fact. Counted on the obligation identity rather than
 /// on the operand span, which two distinct checks can share.
 fn countMatchingBoundsFacts(function: Function, target: BoundsFact) usize {
     var count: usize = 0;
@@ -759,8 +808,8 @@ fn countMatchingBoundsFacts(function: Function, target: BoundsFact) usize {
 }
 
 /// The check an index fact describes is `i < len`; a slice fact's is
-/// `start <= end <= len`. The identity is the join key; the detail is the
-/// agreement check that catches a fact retargeted at the wrong kind of check.
+/// `start <= end <= len`. Used only for the bodies the typed form does not
+/// represent; see `validateBoundsFactsForLowering`.
 fn boundsFactMatchesInstruction(fact: BoundsFact, instruction: Instruction) bool {
     if (instruction.kind != .cmp_bounds) return false;
     if (!fact.typed_inst_id.isValid() or !fact.typed_inst_id.eql(instruction.typed_inst_id)) return false;

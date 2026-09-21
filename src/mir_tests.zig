@@ -3194,11 +3194,38 @@ fn cloneInstructionWithInstId(function: *mir.Function, allocator: std.mem.Alloca
     return error.TestUnexpectedResult;
 }
 
-test "bounds facts distinguish two checks that share one span" {
-    // Two `cmp_bounds` instructions at one span, each with its own fact:
-    // admitted, because the join key is the instruction identity. Pointing
-    // both facts at one instruction, or a fact at the wrong kind of check,
-    // still fails the exactly-one rule.
+/// The typed bounds obligation carried by the one checked index in
+/// `function`, as a mutable handle so a test can retarget it.
+fn soleBoundsObligation(function: *mir.Function) !*mir.InstId {
+    var found: ?*mir.InstId = null;
+    for (function.executable_body.expressions) |*expression| switch (expression.operation) {
+        .index => |*index| {
+            if (!index.bounds_obligation.isValid()) continue;
+            if (found != null) return error.TestUnexpectedResult;
+            found = &index.bounds_obligation;
+        },
+        else => {},
+    };
+    for (function.executable_body.places) |*place| {
+        for (place.projections[0..place.projection_count]) |*projection| switch (projection.*) {
+            .index => |*indexed| {
+                if (!indexed.bounds_obligation.isValid()) continue;
+                if (found != null) return error.TestUnexpectedResult;
+                found = &indexed.bounds_obligation;
+            },
+            else => {},
+        };
+    }
+    return found orelse error.TestUnexpectedResult;
+}
+
+test "bounds facts name typed obligations by identity, not by span" {
+    // The join key is the obligation identity recorded on the typed node, not
+    // the access span and not the `cmp_bounds` instruction. Retargeting the
+    // obligation and its fact together is admitted even though the stream
+    // still holds the old identity at the same span; pointing a fact at an
+    // identity no typed obligation carries, or two facts at one obligation,
+    // is not.
     const source =
         \\fn read_at(values: [2]u32, index: usize) -> u32 {
         \\    return values[index];
@@ -3214,29 +3241,32 @@ test "bounds facts distinguish two checks that share one span" {
     const original_fact = function.bounds_facts[0];
     try std.testing.expect(original_fact.typed_inst_id.isValid());
 
-    const copy_inst_id = freshInstId(function);
-    const original_inst_id = try cloneInstructionWithInstId(function, std.testing.allocator, .cmp_bounds, "i < len", copy_inst_id);
-    try std.testing.expect(original_inst_id.eql(original_fact.typed_inst_id));
+    const obligation = try soleBoundsObligation(function);
+    try std.testing.expect(obligation.eql(original_fact.typed_inst_id));
 
-    const facts = try std.testing.allocator.alloc(mir.BoundsFact, 2);
-    facts[0] = original_fact;
-    facts[1] = original_fact;
-    facts[1].typed_inst_id = copy_inst_id;
-    std.testing.allocator.free(function.bounds_facts);
-    function.bounds_facts = facts;
+    // Retargeted together: still admitted. The `cmp_bounds` instruction keeps
+    // the old identity, so this also proves the check reads the typed body.
+    const retargeted = freshInstId(function);
+    obligation.* = retargeted;
+    function.bounds_facts[0].typed_inst_id = retargeted;
     try mir.validateLoweringAdmission(module_mir);
 
-    // Duplicate: both facts name one check.
-    function.bounds_facts[1].typed_inst_id = original_inst_id;
+    // A fact whose identity no typed obligation carries fails closed, even
+    // though a `cmp_bounds` instruction at that identity still exists.
+    function.bounds_facts[0].typed_inst_id = original_fact.typed_inst_id;
     try std.testing.expectError(error.InvalidMirBoundsFacts, mir.validateLoweringAdmission(module_mir));
 
-    // Retargeted: the fact names an instruction that is not a bounds check.
-    function.bounds_facts[1].typed_inst_id = copy_inst_id;
-    function.bounds_facts[0].typed_inst_id = mir.InstId.fromIndex(copy_inst_id.index() + 1);
+    // Duplicate: two facts naming one obligation.
+    const facts = try std.testing.allocator.alloc(mir.BoundsFact, 2);
+    facts[0] = original_fact;
+    facts[0].typed_inst_id = retargeted;
+    facts[1] = facts[0];
+    std.testing.allocator.free(function.bounds_facts);
+    function.bounds_facts = facts;
     try std.testing.expectError(error.InvalidMirBoundsFacts, mir.validateLoweringAdmission(module_mir));
 
     // Absent identity fails closed.
-    function.bounds_facts[0].typed_inst_id = .invalid;
+    function.bounds_facts[1].typed_inst_id = .invalid;
     try std.testing.expectError(error.InvalidMirBoundsFacts, mir.validateLoweringAdmission(module_mir));
 }
 

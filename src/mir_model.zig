@@ -1512,8 +1512,19 @@ pub const ExecutableExpression = struct {
             /// An unchecked fixed-array index is admitted only when the
             /// operand is a canonical in-range integer literal.
             checked: bool = true,
+            /// Identity of the bounds obligation this checked access owns.
+            /// See `ExecutableBoundsObligation`.
+            bounds_obligation: InstId = .invalid,
         },
-        range_slice: struct { base: ExprId, start: ExprId, end: ExprId, checked: bool = true },
+        range_slice: struct {
+            base: ExprId,
+            start: ExprId,
+            end: ExprId,
+            checked: bool = true,
+            /// Identity of the bounds obligation this checked slice owns.
+            /// See `ExecutableBoundsObligation`.
+            bounds_obligation: InstId = .invalid,
+        },
         member: struct { base: ExprId, field_index: usize },
         slice_length: ExprId,
         /// Construct the tagged representation of a sized value optional.
@@ -1800,6 +1811,9 @@ pub const ExecutablePlace = struct {
             bound: ?usize = null,
             checked: bool = true,
             span_id: SpanId = .invalid,
+            /// Identity of the bounds obligation this checked projection
+            /// owns. See `ExecutableBoundsObligation`.
+            bounds_obligation: InstId = .invalid,
         },
         deref,
     };
@@ -2514,6 +2528,68 @@ pub fn executableExpressionForInstruction(body: *const ExecutableBody, inst_id: 
         if (expression.inst_id.eql(inst_id)) return expression;
     }
     return null;
+}
+
+/// A bounds obligation carried by a typed node.
+///
+/// A checked access owns exactly one Bounds exceptional edge, but the typed
+/// body spells a checked access two ways: as an `index` / `range_slice` value
+/// expression, and as an `index` projection on an `ExecutablePlace` when the
+/// access is an assignment target or a projected load. Both are the same
+/// obligation, so both carry one.
+pub const ExecutableBoundsObligation = struct {
+    kind: BoundsFactKind,
+    /// The obligation's identity, recorded by the builder on the typed node.
+    /// A `BoundsFact` names this and nothing else; see
+    /// `BoundsFact.typed_inst_id`.
+    id: InstId,
+};
+
+/// The bounds obligation a typed value expression owns, if any.
+pub fn executableExpressionBoundsObligation(expression: ExecutableExpression) ?ExecutableBoundsObligation {
+    return switch (expression.operation) {
+        .index => |index| if (index.bounds_obligation.isValid())
+            .{ .kind = .index, .id = index.bounds_obligation }
+        else
+            null,
+        .range_slice => |slice| if (slice.bounds_obligation.isValid())
+            .{ .kind = .slice, .id = slice.bounds_obligation }
+        else
+            null,
+        else => null,
+    };
+}
+
+/// The bounds obligation a typed place projection owns, if any.
+pub fn executablePlaceBoundsObligation(projection: ExecutablePlace.Projection) ?ExecutableBoundsObligation {
+    return switch (projection) {
+        .index => |indexed| if (indexed.bounds_obligation.isValid())
+            .{ .kind = .index, .id = indexed.bounds_obligation }
+        else
+            null,
+        else => null,
+    };
+}
+
+/// How many typed bounds obligations of `kind` carry `id`. The exactly-one
+/// invariant a `BoundsFact` must satisfy is stated over this count, not over
+/// the legacy `cmp_bounds` instructions it used to be counted against.
+pub fn executableBoundsObligationCount(body: *const ExecutableBody, id: InstId, kind: BoundsFactKind) usize {
+    if (!id.isValid()) return 0;
+    var count: usize = 0;
+    for (body.expressions) |expression| {
+        if (executableExpressionBoundsObligation(expression)) |obligation| {
+            if (obligation.kind == kind and obligation.id.eql(id)) count += 1;
+        }
+    }
+    for (body.places) |place| {
+        for (place.projections[0..place.projection_count]) |projection| {
+            if (executablePlaceBoundsObligation(projection)) |obligation| {
+                if (obligation.kind == kind and obligation.id.eql(id)) count += 1;
+            }
+        }
+    }
+    return count;
 }
 
 pub const ExecutableBody = struct {

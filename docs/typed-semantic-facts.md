@@ -65,13 +65,30 @@ Not yet typed — the honest list:
   types can share one name. Structural identity remains `TypeId`, and a
   completeness check that compares element or pointee types by `name()` is
   still approximating one.
-- **Instruction-scoped facts are not yet fields on the typed node.** They key
-  on the instruction's identity now rather than on a source span -- integer,
-  float, bounds, representation, target-type, call-target, `const_get`, bind
-  thunk, range and element/range-slice access facts all carry a
-  `typed_inst_id` -- but they are still side tables the verifier joins, not
-  data hanging off `ExecutableBody`. Resolved accesses also key on an
-  `AccessId`; pointer provenance keys on the place it describes.
+- **Instruction-scoped facts are side tables, and are being folded into the
+  typed body one family at a time.** They key on the instruction's identity
+  rather than on a source span -- integer, float, bounds, representation,
+  target-type, call-target, `const_get`, bind thunk, range and
+  element/range-slice access facts all carry a `typed_inst_id`. Resolved
+  accesses also key on an `AccessId`; pointer provenance keys on the place it
+  describes. The handoff, family by family:
+
+  | Family | Typed obligation it names | Verifier reads |
+  |---|---|---|
+  | bounds | `index.bounds_obligation`, `range_slice.bounds_obligation`, and the same field on an `index` place projection | the typed body |
+  | integer literal | -- | the instruction stream |
+  | float literal | -- | the instruction stream |
+  | target-type | -- | the instruction stream |
+  | call-target | -- | the instruction stream |
+  | representation | -- | the instruction stream |
+  | range | -- | the instruction stream |
+  | const_get | -- | the instruction stream |
+  | bind thunk | -- | the instruction stream |
+
+  A family whose verifier reads the typed body may still fall back to the
+  stream for a body the typed form does not represent -- an incomplete body,
+  an `extern` declaration, a global initializer's pseudo-callable -- and
+  `todo.md` records which.
 - **The legacy instruction stream and the typed body are joined, but the
   stream is still there.** See [the join](#the-join-between-the-two-bodies)
   below. The remaining `Instruction.detail` readers are listed in

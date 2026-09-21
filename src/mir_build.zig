@@ -10666,6 +10666,53 @@ pub const FunctionBuilder = struct {
         node.inst_id = self.last_inst_id;
     }
 
+    /// Record the bounds obligation identity on the typed node built from the
+    /// same access, so a `BoundsFact` joins to a node in `ExecutableBody`
+    /// rather than to a `cmp_bounds` instruction the typed body does not
+    /// represent.
+    ///
+    /// The typed form of a checked access is either an `index` /
+    /// `range_slice` value expression or an `index` projection on a place,
+    /// never both for one occurrence, so the first unclaimed obligation at
+    /// this access span is this check's. Claiming in order is what keeps two
+    /// checks that share one span distinct: each claims its own node.
+    fn recordExecutableBoundsObligation(
+        self: *FunctionBuilder,
+        kind: mir_model.BoundsFactKind,
+        span: ast.Span,
+        inst_id: InstId,
+    ) !void {
+        if (!inst_id.isValid()) return;
+        const span_id = try self.internSpanId(self.sourcePoint(span));
+        for (self.executable_expressions.items) |*expression| {
+            if (!expression.span_id.eql(span_id)) continue;
+            switch (expression.operation) {
+                .index => |*index| {
+                    if (kind != .index or !index.checked or index.bounds_obligation.isValid()) continue;
+                    index.bounds_obligation = inst_id;
+                    return;
+                },
+                .range_slice => |*slice| {
+                    if (kind != .slice or !slice.checked or slice.bounds_obligation.isValid()) continue;
+                    slice.bounds_obligation = inst_id;
+                    return;
+                },
+                else => {},
+            }
+        }
+        if (kind != .index) return;
+        for (self.executable_places.items) |*place| {
+            for (place.projections[0..place.projection_count]) |*projection| switch (projection.*) {
+                .index => |*indexed| {
+                    if (!indexed.span_id.eql(span_id) or !indexed.checked or indexed.bounds_obligation.isValid()) continue;
+                    indexed.bounds_obligation = inst_id;
+                    return;
+                },
+                else => {},
+            };
+        }
+    }
+
     /// Link the statement appended most recently to the instruction emitted
     /// most recently. Both are the current source statement.
     fn linkLastExecutableStatementToLastInstruction(self: *FunctionBuilder) void {
@@ -14230,6 +14277,7 @@ pub const FunctionBuilder = struct {
                         .typed_inst_id = self.last_inst_id,
                         .typed_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.index.*).span)),
                     });
+                    try self.recordExecutableBoundsObligation(.index, expr.span, self.last_inst_id);
                 }
                 const ty = self.exprType(expr);
                 try self.addInstr(.index, if (elide_bounds) "const_in_bounds" else "bounds_checked", ty, expr.span);
@@ -14292,6 +14340,7 @@ pub const FunctionBuilder = struct {
                         .typed_inst_id = self.last_inst_id,
                         .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
                     });
+                    try self.recordExecutableBoundsObligation(.slice, expr.span, self.last_inst_id);
                 }
                 try self.addInstr(.index, if (elide_slice) "range_slice_const_in_bounds" else "range_slice", self.exprType(expr), expr.span);
                 self.access_facts.items[access_fact_index].range_slice.typed_inst_id = self.last_inst_id;
