@@ -102,8 +102,8 @@ that the typed body does not represent as a node at all:
 | integer literal | `integer_literal_conversion`, agreeing on `detail` (the literal spelling) | **Done.** Joins `ExecutableExpression.literal_conversion`; the spelling agreement is gone. |
 | float literal | `expr` with `detail == "float"` | **Done.** Shares `ExecutableExpression.literal_conversion` with the integer family. |
 | representation | `representation_check` / `representation_use`, agreeing on `kind` and `detail` | No. |
-| target-type | `target_type`, agreeing on `detail` (the `TargetTypeKind` tag) | No. |
-| call-target | `call_target` | No. |
+| target-type | `target_type`, agreeing on `detail` (the `TargetTypeKind` tag) | Not yet -- a node owns *several*, and 18% of them own no node. Measured; see below. |
+| call-target | `call_target` | Nearly. 370 of 377 already have exactly one typed node at the instruction's span; the residue is explicit traps. Measured; see below. |
 | range | `unchecked_assume` inside a `no_overflow` contract region | No. |
 | access facts | `index` / `expr` | No. |
 | bind-thunk | `call_target` and `target_type`; its closure-local half really is `.local`, a joinable kind | No, for a different reason: `BindThunkFact` names the closure local by `closure_value_id`, and `ExecutableLocalIdentity` carries no `ValueId`. There is no recorded correspondence to join on, and joining by spelling would be weaker than what is there. |
@@ -205,6 +205,57 @@ families must stay *separable*, or deleting every float fact is reported as
 family owns its obligation (`mir_model.executableLiteralConversionIsFloat`,
 reading the literal payload), so each completeness walk skips the other
 family's obligations and a missing float fact stays a float refusal.
+
+### Note: what the target-type and call-target families measure at
+
+The first three families -- bounds, integer literal, float literal -- landed
+on one shape: a single obligation per typed node, recorded by the builder
+where it already appends the fact. Before assuming the next two fit it, both
+were counted over every fixture in `tests/c_emit`, `tests/spec`, `tests/std`
+and `tests/exec`: 12,316 target-type facts over every function, and 377
+call-target facts over the functions
+`mir_verify.typedObligationsRepresented` admits.
+
+**target-type does not fit, for two independent reasons.**
+
+| Shape | Count | Share |
+|---|---|---|
+| one typed expression at the fact's span, and the fact is the only one there | 5,045 | 41% |
+| one typed expression, but the fact *shares* that span with 1 to 5 other target-type facts | 4,397 | 36% |
+| **no typed expression at the fact's span at all** | 2,246 | 18% |
+| several typed expressions at the span | 628 | 5% |
+
+The 18% is not a long tail and not an artifact of unrepresented bodies:
+`expression_result` (1,336) and `direct_call_result` (774) are most of it, and
+`direct_call_result` is recorded at the *callee* span, where the typed body
+holds a `SymbolId` rather than an expression. There is no node there to carry
+anything, by construction.
+
+The 36% is the second reason, and it rules out the shape that worked three
+times: a single field cannot hold a *set*. `explicit_cast_source` and
+`explicit_cast_target` share one span, and the four `mmio_*` kinds share one
+span, so a node owns several target-type obligations and needs an owned list
+allocated and freed with the body (as `ExecutableBody.owned_operand_lists`
+already is), not a field.
+
+There is a third cost on top of the container. The target-type agreement is
+not one field: `targetTypeFactAgreesWithInstruction` checks kind,
+`target_index`, target owner, result type, span, callee span and operand
+identity, and `targetTypeSyntaxMatches` checks `target_type_id` and
+`aggregate_construction` separately so a stale target type can be *reported*
+as stale rather than merely rejected. Each one has to be recorded on the node
+or deliberately dropped, and `StaleMirTargetTypeFacts` is a refusal users see.
+
+**call-target nearly fits.** 370 of 377 facts have exactly one typed
+expression at their instruction's span. The residue is six facts with no
+expression -- `trap_assert` (3), `trap_bounds` (2), `mmio_map` (1) -- and
+seven with two (`byte_view_as_bytes` 5, `dma_as_slice` and `dma_addr` one
+each, which the claim-the-first-unclaimed rule the other families use already
+handles). The explicit traps are the real shape:
+`finishExecutableTerminalTrap` realizes them as a *terminator*, which is
+neither a statement nor an expression, so the obligation needs a home on
+`ExecutableTerminator` before this family can move whole. That is the next
+step here, and it is small.
 
 ### Note: `index` over a slice of pointers is not a `supportsType` gap
 
