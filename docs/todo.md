@@ -536,6 +536,36 @@ selector line, before any of the 220 can move without losing what they prove.
 Adding those to `src/fixture_expect.zig` is the next step; the 4 uniform tests
 are not a reason to start the corpus before it can hold the other 421.
 
+### Note: verifier checks that still read the stream, and why
+
+With all eleven fact families carrying typed obligations, every remaining
+`Instruction.detail` read in `mir_verify.zig` was classified. There are 39
+occurrences; 4 are prose in doc comments and 35 are reads, and **every one of
+the 35 falls into one of three groups, none of which the typed body can answer
+today**. No check was left on the stream that the typed body could have taken.
+
+| Group | Reads | Why it needs the stream |
+|---|---|---|
+| **The finding channel** (`verifyBuiltMir`'s per-instruction walk) | 14 | The instruction *is* the finding. The builder records a refusal as an `ffi_check` / `usage_check` / `switch_check` / … instruction whose `detail` names it, and the verifier renders it as the diagnostic the user sees. There is nothing to join: the typed body has no representation of a refusal, and a body carrying one never lowers. Getting off `detail` here is not a move to the typed body but a change to where a finding lives -- 83 builder sites and about ten string→code mappers. It is the next step for this group, not this one. |
+| **The stream's own well-formedness** (`instructionTypedIdentitiesValid`) | 8 | It verifies the stream, which is the thing being checked. `logical_not` / `logical_and` / `logical_or` must carry operand span identities; a `cast` may; `array_literal` and `struct_literal` carry aggregate operands; the three call-argument `target_type` kinds carry a callee span. Each is a statement *about an instruction*, and restating it over the typed body would prove something else. It goes when the stream goes. |
+| **The eleven families' fallback walks** | 13 | Already behind `typedObligationsRepresented`: an incomplete body, an `extern` declaration and a global initializer's pseudo-callable have no typed body to carry the obligation, so the stream is the only representation they have. Bounds (2), `const_get` (3), access (3), target-type (1), call-target (1), range (1), float (1), representation (1). |
+
+One candidate was tried and reverted, and the measurement is the reason:
+`validateKnownFactTypesForLowering` walks the stream asking that no value a
+backend renders carries the `unknown` placeholder type, keyed on a
+hand-maintained list of instruction *kinds*
+(`instructionRequiresKnownLoweringType`) -- a classification of the
+representation being deleted. Restating it over `ExecutableBody`'s parameters,
+locals and expressions looked like the obvious fold. It is **already proven
+there**: `mir_executable_body.verify` calls `verifyType` on every typed value,
+and an `unknown` on a typed node fails its type-identity match first
+(`InvalidMirExecutableBody`, before `UnknownMirLoweringType` is reached). So
+the typed half exists, the stream half is what is left, and adding a second
+typed walk would be duplicate authority -- the thing this campaign removes.
+The stream half also cannot simply go: lowering still *consumes* the
+instruction stream through body plans, so an `unknown` there is still
+reachable.
+
 ### Note: the `Instruction.detail` readers that are left
 
 `mir_build.zig`, `mir_body_plan.zig` and `lower_c_map.zig` no longer classify
