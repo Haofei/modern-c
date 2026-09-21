@@ -51,7 +51,6 @@ const TargetTypeKind = mir_model.TargetTypeKind;
 const TypeId = mir_model.TypeId;
 const ValueId = mir_model.ValueId;
 const ValueType = mir_model.ValueType;
-const addressClassFromName = mir_type.addressClassFromName;
 const addressClassMismatchDiagnostic = mir_verify_util.addressClassMismatchDiagnostic;
 const addressClassName = mir_model.addressClassName;
 const mmioDiagnostic = mir_verify_util.mmioDiagnostic;

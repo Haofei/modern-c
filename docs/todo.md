@@ -75,7 +75,7 @@ backends off syntax, is described in
 
 | Priority | Work | Why, and what it depends on |
 |---|---|---|
-| P0 | Collapse MIR to the single `ExecutableBody`: the instruction-scoped fact tables are folded into typed obligations (all eleven families), and the dump shows the typed body (see the notes below). What is left is the finding channel -- the one group of `Instruction.detail` readers that is not a fallback -- and then deleting `Function.blocks[].instructions`. | The core of the original design review. Two body representations cost every change twice. The fold had to come first, because surveying all eleven verifier families showed none could move until the typed body represented the obligations the checking instructions carry. Depends on the golden-test conversion for affordability. |
+| P0 | Collapse MIR to the single `ExecutableBody`: the instruction-scoped fact tables are folded into typed obligations (all eleven families), the dump shows the typed body, and the finding channel is a typed `Function.findings` list rather than a `detail` string (see the notes below). What is left is deleting `Function.blocks[].instructions` itself. | The core of the original design review. Two body representations cost every change twice. The fold had to come first, because surveying all eleven verifier families showed none could move until the typed body represented the obligations the checking instructions carry. Depends on the golden-test conversion for affordability. |
 | P0 | Replace the string-carrying `mir.ValueType` with type ids from the resolved table, then drop the parallel `typed_result_ty` mirrors. | Falls out once the table answers everything `ValueType.name()` is asked for. |
 | P0 | Finish the sema handoff: intrinsic call results where sema and builder share one rule, `address_of` / `borrow` / `~`, alias collapse once the emitters take spellings from the table, and deletion of the builder's own type maps once unit tests build MIR through a checker. | Each slice: record in sema, read in the builder under the agree-assertion, delete the builder copy. |
 | P1 | Give expressions a node identity that survives copying, or a per-instance span remap in monomorphization. | Unblocks monomorphizing after sema and stops instances failing closed in the resolved table. |
@@ -575,14 +575,13 @@ note -- and the fact rows, which print a fact's own fields.
 ### Note: verifier checks that still read the stream, and why
 
 With all eleven fact families carrying typed obligations, every remaining
-`Instruction.detail` read in `mir_verify.zig` was classified. There are 39
-occurrences; 4 are prose in doc comments and 35 are reads, and **every one of
-the 35 falls into one of three groups, none of which the typed body can answer
-today**. No check was left on the stream that the typed body could have taken.
+`Instruction.detail` read in `mir_verify.zig` was classified into three
+groups. The first of the three, the finding channel, is now closed: 21 reads
+are left, and they are the other two groups only.
 
 | Group | Reads | Why it needs the stream |
 |---|---|---|
-| **The finding channel** (`verifyBuiltMir`'s per-instruction walk) | 14 | The instruction *is* the finding. The builder records a refusal as an `ffi_check` / `usage_check` / `switch_check` / … instruction whose `detail` names it, and the verifier renders it as the diagnostic the user sees. There is nothing to join: the typed body has no representation of a refusal, and a body carrying one never lowers. Getting off `detail` here is not a move to the typed body but a change to where a finding lives -- 83 builder sites and about ten string→code mappers. It is the next step for this group, not this one. |
+| **The finding channel** (`verifyBuiltMir`'s per-instruction walk) | 0 | **Done.** A refusal is a `mir.Function.findings` row now, not an instruction whose `detail` names it; see the note below. |
 | **The stream's own well-formedness** (`instructionTypedIdentitiesValid`) | 8 | It verifies the stream, which is the thing being checked. `logical_not` / `logical_and` / `logical_or` must carry operand span identities; a `cast` may; `array_literal` and `struct_literal` carry aggregate operands; the three call-argument `target_type` kinds carry a callee span. Each is a statement *about an instruction*, and restating it over the typed body would prove something else. It goes when the stream goes. |
 | **The eleven families' fallback walks** | 13 | Already behind `typedObligationsRepresented`: an incomplete body, an `extern` declaration and a global initializer's pseudo-callable have no typed body to carry the obligation, so the stream is the only representation they have. Bounds (2), `const_get` (3), access (3), target-type (1), call-target (1), range (1), float (1), representation (1). |
 
@@ -601,6 +600,98 @@ typed walk would be duplicate authority -- the thing this campaign removes.
 The stream half also cannot simply go: lowering still *consumes* the
 instruction stream through body plans, so an `unknown` there is still
 reachable.
+
+### Note: how the finding channel left the instruction stream
+
+**The one group of `Instruction.detail` readers that was not a fallback.** A
+refusal was an instruction -- `ffi_check`, `usage_check`, `switch_check`,
+`result_check`, `operator_check`, `conversion_check`, `assignment_check`,
+`arithmetic_domain_check`, `nullability_conversion`, `aggregate_check`,
+`unsafe_check`, `mmio_check`, `address_deref`, `address_conversion`,
+`address_operation` -- whose `detail` string named the finding, and
+`mir_verify.zig` recovered the diagnostic by comparing that string against a
+chain of literals. Ten such mappers in `mir_verify_util.zig`; 83 builder emit
+sites.
+
+Unlike the eleven fact families, this one had nothing to join. The typed body
+has no representation of a refusal and never will: a body carrying one does
+not lower, and a refused body is routinely *incomplete*, so there is often no
+typed node at all. So the fold was not "find the node that owns it" but "stop
+making it a string".
+
+**Where it lives.** `mir.Function.findings`, a list beside the fact tables, not
+a field on `ExecutableBody` -- chosen because it must survive both an
+incomplete body and the deletion of the instruction stream. A `Finding` is a
+`SpanId` plus a `FindingKind`, a tagged union with one arm per family, and the
+arm carries exactly what its diagnostic and its dump row need:
+
+| Arm | Payload | Why |
+|---|---|---|
+| `operator`, `arithmetic_domain`, `assignment`, `switch_coverage`, `result`, `nullability`, `ffi`, `usage`, `mmio` | an enum, nothing else | the finding is the whole content |
+| `aggregate` | finding + `ValueType` | the dump row names the aggregate type |
+| `conversion` | finding + `ValueType` | the dump row names the source type |
+| `address_deref` | `AddressClass` | the message names the class |
+| `address_conversion` | `{ target, source }` | `addressClassMismatchDiagnostic` reads the pair |
+| `address_operation`, `unsafe_required` | a spelling | one diagnostic each; the text is a *name* -- an operator, a callee -- not a classification |
+
+**What the typed mapping caught that the string one could not.** Each mapper
+was an `eql` chain ending in a `return`, and that final return served two
+purposes at once: a real finding, and "a spelling I do not recognise". Making
+each a total switch separated them, and the separation was not academic:
+
+- `aggregateDiagnostic` answered `E_NO_IMPLICIT_CONVERSION` -- a *conversion*
+  family code -- for an unrecognised aggregate spelling.
+- `usageFindingDiagnostic` answered `E_OPERATOR_OPERAND`, an *operator* family
+  code, and one of its eight arms (`dma_operation`) had no builder producer at
+  all. The member is kept so the code keeps a reference; what is gone is the
+  pretence that MIR can reach it.
+- `resultFindingDiagnostic` returned `null` for both "this finding has no
+  diagnostic" (`try_handled`, an observation the dump prints) and "no mapping".
+- `assignmentFindingDiagnostic`'s third answer, `E_INVALID_ASSIGNMENT_TARGET`,
+  was unreachable from MIR; sema reports it.
+- `nullabilityDiagnostic` and `ffiFindingDiagnostic` each had a fallback
+  identical to one of their own arms.
+- `addressClassFromName(instruction.detail) orelse .paddr` parsed a class out
+  of a string and silently defaulted, so a drifted spelling would have reported
+  a `VAddr` deref as a `PAddr` one.
+
+**Six producers stopped returning text.** `mir_type.conversionFinding`,
+`nullabilityFinding` and `integerLiteralRangeFinding`,
+`mir_operator.checkedIntegerBinaryFinding` and `floatBinaryFinding`, and the
+builder's own `domainConversionCallFinding`, `typedResourceCallFinding`,
+`atomicOrderingFinding`, `mmioOrderingFinding` and `dmaCacheModeFinding` all
+decided which finding it was and then spelled it so the verifier could decide
+again. They return the enum.
+
+**Every one of the fifteen `*_check` instructions stopped being emitted.**
+Nothing outside the verifier and the verification-fact dump keyed on any of
+them: none is a joinable kind, no fact family names one, and
+`instructionRequiresKnownLoweringType` already classified the `*_check` kinds
+as carrying no lowering type. The one exception was a test --
+`mir_tests`' "MIR pairs each typed MMIO access with the check that guards it"
+-- which reads `function.findings` now and keeps its contract, because what it
+proves (an *accepted* `mmio.read` carries no refusal) is a pair the dump does
+not show.
+
+**Measured, per commit, not assumed.** Against a binary built from
+`git archive HEAD`:
+
+- emitted C, refusals and exit codes byte-identical over every fixture in
+  `tests/c_emit`, `tests/spec`, `tests/std` and `tests/exec`, in both the
+  kernel and hosted profiles -- 2,584 outputs.
+- the verifier's findings *and* its reported diagnostics unchanged over 351
+  fixture reports (every `.mc` in those four corpora plus `tests/mir` and
+  `tests/mir_verify`), compared as multisets because the `.expect` grammar
+  asserts presence and counts, not order.
+- source maps: identical for every family except `result`, where 9 of 163
+  changed. Every differing line differs only in the
+  `mir_block="mir:<fn>:block:<b>:instr:<n>:<kind>"` provenance label, whose
+  index shifts when an instruction leaves the stream, plus the two content
+  digests in the `.mcmeta` sidecar. No row appears or disappears and no
+  mapping changes -- `sourceMapKindForMirInstruction` maps `result_check` to
+  null, so it never produced a row of its own. `result` is the only family
+  whose instruction appeared in bodies that *do* lower: `try_handled` is
+  recorded 108 times in accepted programs.
 
 ### Note: the `Instruction.detail` readers that are left
 

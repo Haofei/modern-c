@@ -53,7 +53,11 @@ Not yet typed — the honest list:
 
 - **MIR carries two body representations.** `Function.blocks[].instructions`
   is a `kind` enum plus a `detail: []const u8` string, alongside the typed
-  `executable_body`. The verifier still string-compares `instruction.detail`.
+  `executable_body`. The verifier still string-compares `instruction.detail`,
+  but only in two places now: the eleven fact families' fallback walks for a
+  body the typed form does not represent, and `instructionTypedIdentitiesValid`,
+  which verifies the stream itself. The third group, the finding channel, is
+  gone -- see below.
 - **`ValueType` is stringly typed** (`integer: []const u8`, `struct_: []const u8`)
   and mirrored by parallel `TypeId` / `SignatureTypeId` fields; `Instruction`
   carries both `result_ty: ValueType` and `typed_result_ty: TypeId`.
@@ -99,6 +103,41 @@ Not yet typed — the honest list:
   stream is still there.** See [the join](#the-join-between-the-two-bodies)
   below. The remaining `Instruction.detail` readers are listed in
   [`todo.md`](todo.md).
+
+## Refusals are values, not instructions
+
+A refusal the MIR builder records is a `mir.Function.findings` row: a `SpanId`
+and a `FindingKind`, a tagged union with one arm per family. It used to be an
+`ffi_check` / `usage_check` / `switch_check` / `result_check` /
+`operator_check` / `conversion_check` / `assignment_check` /
+`arithmetic_domain_check` / `nullability_conversion` / `aggregate_check` /
+`unsafe_check` / `mmio_check` / `address_deref` / `address_conversion` /
+`address_operation` instruction whose `detail` string named the finding, which
+`mir_verify.zig` then classified back into a diagnostic through ten
+string-comparison chains.
+
+The list is on `Function`, not on `ExecutableBody`, and that is the whole
+design decision. A finding is not an obligation the typed body carries; it says
+the function must not lower at all, and a refused body is routinely
+*incomplete*, so there is frequently no typed node to hang it on. The list has
+to outlive the instruction stream, and `ExecutableBody` would not.
+
+`mir_verify_util.zig` maps each finding to its diagnostic with a total switch
+over the family's enum. That is what makes "this finding has no diagnostic"
+(exactly one: `try_handled`) different from "this spelling has no mapping",
+which the `eql` chains could not express -- each of them ended in a `return`
+that served as both. `todo.md` records what that separation caught.
+
+Every producer that used to answer with a spelling -- `conversionFinding`,
+`nullabilityFinding`, `integerLiteralRangeFinding`,
+`checkedIntegerBinaryFinding`, `floatBinaryFinding`,
+`domainConversionCallFinding`, `typedResourceCallFinding`,
+`atomicOrderingFinding`, `mmioOrderingFinding`, `dmaCacheModeFinding` --
+returns the enum, so a finding is never text between the decision and the
+diagnostic. Two arms carry a name rather than an enum on purpose:
+`address_operation` and `unsafe_required` have one diagnostic each, and what
+they carry is an operator or callee spelling -- a value name, like an
+instruction's value id, not a classification.
 
 ## The join between the two bodies
 
