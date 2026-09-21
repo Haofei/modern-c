@@ -46,6 +46,7 @@ OUT_OF_SCOPE = {
     "traits_orphan_nonopaque_reject.mc": "pure compile_error fixture with std import; residue cannot be chunk-isolated after EXPECT_ERROR stripping (phase=sema; E_ORPHAN_IMPL owned by spec_tests.zig)",
     "pointer_view_conversions.mc": "accept/reject pointer+view const-narrow cases share types the chunk-level EXPECT_ERROR strip cannot isolate (phase=sema; E_NO_IMPLICIT_POINTER_CONVERSION owned by spec_tests.zig; accept emit covered by tests/c_emit/pointer_views.mc + pointer_const_narrow.mc)",
     "reflection.mc": "reflection accept/reject cases include sema-only overflow layouts whose top-level declarations cannot be chunk-isolated by EXPECT_ERROR stripping (phase=parse,sema; E_REFLECTION_* owned by spec_tests.zig; accept emit covered by tests/c_emit/reflection.mc)",
+    "type_arg_and_trivial_drop_reject.mc": "pure compile_error fixture (expect=compile_error, no accept case); stripping both EXPECT_ERROR cases leaves only the `fn type_id(comptime T: type)` template the rejected call was written to exercise, and an uninstantiated type-generic template is not a C-emission contract -- the backend never emits one, only its instances (phase=parse,sema; E_TRIVIAL_DROP_NOT_MOVE/E_TYPE_ARG_REQUIRED owned by spec_tests.zig)",
 }
 
 # Compile the emitted C exactly as the MC kernel profile intends: a deterministic

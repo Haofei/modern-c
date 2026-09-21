@@ -7314,7 +7314,7 @@ test "MIR owns byte-view call target facts" {
     const view = functionByName(typed_mir, "byte_view").?;
     try std.testing.expectEqual(@as(usize, 1), view.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.byte_view_as_bytes, view.call_target_facts[0].kind);
-    try std.testing.expectEqualStrings("[]const", view.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqualStrings("[]const u8", view.call_target_facts[0].result_ty.name());
     const view_source = targetTypeFactByKind(view, .byte_view_source) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("u32", view_source.target_ty.kind.name.text);
     const view_result = targetTypeFactByKind(view, .byte_view_result) orelse return error.TestUnexpectedResult;
@@ -7366,7 +7366,7 @@ test "MIR owns raw-many offset identity and complete types" {
     const shifted = functionByName(typed_mir, "shifted").?;
     try std.testing.expectEqual(@as(usize, 1), shifted.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.raw_many_offset, shifted.call_target_facts[0].kind);
-    try std.testing.expectEqualStrings("[*]mut", shifted.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqualStrings("[*]mut u16", shifted.call_target_facts[0].result_ty.name());
     const raw_base = targetTypeFactByKind(shifted, .raw_many_offset_base) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("Words", raw_base.target_ty.kind.name.text);
     const raw_element = targetTypeFactByKind(shifted, .raw_many_offset_element) orelse return error.TestUnexpectedResult;
@@ -7917,16 +7917,16 @@ test "MIR owns semantic escape call target facts" {
     const noalias_fn = functionByName(typed_mir, "noalias_value").?;
     try std.testing.expectEqual(@as(usize, 1), noalias_fn.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.assume_noalias, noalias_fn.call_target_facts[0].kind);
-    try std.testing.expectEqualStrings("*mut", noalias_fn.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqualStrings("*mut u8", noalias_fn.call_target_facts[0].result_ty.name());
     try std.testing.expect(targetTypeFactByKind(noalias_fn, .assume_noalias_source) != null);
     try std.testing.expect(targetTypeFactByKind(noalias_fn, .assume_noalias_result) != null);
 
     const address_fn = functionByName(typed_mir, "noalias_address").?;
     try std.testing.expectEqual(@as(usize, 1), address_fn.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.assume_noalias, address_fn.call_target_facts[0].kind);
-    try std.testing.expectEqualStrings("*mut", address_fn.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqualStrings("*mut u8", address_fn.call_target_facts[0].result_ty.name());
     const noalias_address_source = targetTypeFactByKind(address_fn, .assume_noalias_source) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("*mut", noalias_address_source.result_ty.name());
+    try std.testing.expectEqualStrings("*mut u8", noalias_address_source.result_ty.name());
     try std.testing.expect(targetTypeFactByKind(address_fn, .assume_noalias_result) != null);
     var saw_mut_u8_pointer_result = false;
     for (address_fn.target_type_facts) |fact| {
@@ -9804,7 +9804,7 @@ test "MIR records typed call target facts for raw address calls" {
     try std.testing.expectEqualStrings("u32", read.call_target_facts[0].result_ty.name());
     try std.testing.expectEqual(@as(usize, 1), pointer.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.raw_ptr, pointer.call_target_facts[0].kind);
-    try std.testing.expectEqualStrings("*mut", pointer.call_target_facts[0].result_ty.name());
+    try std.testing.expectEqualStrings("*mut u32", pointer.call_target_facts[0].result_ty.name());
     try std.testing.expectEqual(@as(usize, 1), store.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.raw_store, store.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("void", store.call_target_facts[0].result_ty.name());
@@ -10792,8 +10792,8 @@ test "MIR dump exposes representation value identities" {
     const read_fn = functionByName(typed_mir, "read_ptr_param").?;
     const return_p_identity = valueIdentityBySpelling(return_fn, "p").?;
     const read_p_identity = valueIdentityBySpelling(read_fn, "p").?;
-    const return_mut_ptr_identity = typeIdentityBySpelling(return_fn, "*mut").?;
-    const read_mut_ptr_identity = typeIdentityBySpelling(read_fn, "*mut").?;
+    const return_mut_ptr_identity = typeIdentityBySpelling(return_fn, "*mut u8").?;
+    const read_mut_ptr_identity = typeIdentityBySpelling(read_fn, "*mut u8").?;
     const read_load_span_id = read_fn.representation_facts[0].typed_span_id;
     try std.testing.expect(read_load_span_id.isValid());
     const read_load_span_identity = read_fn.span_identities[read_load_span_id.index()];

@@ -717,10 +717,21 @@ test "value types distinguish every legacy spelling collision family" {
     const pointer_u8: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
     const pointer_u32: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u32" } };
     const nullable_pointer_u8: mir.ValueType = .{ .nullable_pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
-    try std.testing.expectEqualStrings(pointer_u8.name(), pointer_u32.name());
+    // The spelling keeps the pointee for the scalar names it can name, so
+    // these two no longer collide -- a pointer's child and the pointee type's
+    // own name are one text now. Nullability still is not in the spelling.
+    try std.testing.expectEqualStrings("*mut u8", pointer_u8.name());
+    try std.testing.expectEqualStrings("*mut u32", pointer_u32.name());
     try std.testing.expectEqualStrings(pointer_u8.name(), nullable_pointer_u8.name());
     try std.testing.expect(!mir.ValueType.eql(pointer_u8, pointer_u32));
     try std.testing.expect(!mir.ValueType.eql(pointer_u8, nullable_pointer_u8));
+
+    // A pointee the spelling cannot name falls back to the bare form, so the
+    // name is still not an identity.
+    const pointer_payload: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "Payload" } };
+    const pointer_other: mir.ValueType = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "Other" } };
+    try std.testing.expectEqualStrings(pointer_payload.name(), pointer_other.name());
+    try std.testing.expect(!mir.ValueType.eql(pointer_payload, pointer_other));
 
     const named_collisions = [_]mir.ValueType{
         .{ .nullable_value = "Payload" },

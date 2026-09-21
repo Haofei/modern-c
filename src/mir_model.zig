@@ -5688,29 +5688,51 @@ pub const BuildOptions = struct {
 
 pub fn pointerShapeName(shape: PointerShape) []const u8 {
     if (isNullPointerShape(shape)) return "null";
-    if (std.mem.eql(u8, shape.child, "c_void")) {
-        return switch (shape.kind) {
-            .single => switch (shape.mutability) {
-                .none => "* c_void",
-                .mut => "*mut c_void",
-                .@"const" => "*const c_void",
-            },
-            .raw_many => switch (shape.mutability) {
-                .none => "[*] c_void",
-                .mut => "[*]mut c_void",
-                .@"const" => "[*]const c_void",
-            },
-            .slice => switch (shape.mutability) {
-                .none => "[] c_void",
-                .mut => "[]mut c_void",
-                .@"const" => "[]const c_void",
-            },
+    return pointerSpelling(shape.kind, shape.mutability, shape.child);
+}
+
+/// The one spelling rule for a pointer type, over the pointee's own spelling.
+///
+/// `PointerShape.child` is produced by this rule and `ValueType.name()` renders
+/// through it, so a pointer's child and the pointee type's own name are the
+/// same text. They used to be two rules -- the syntax side kept the pointee for
+/// the scalar spellings it knew, the model side dropped it for everything but
+/// `c_void` -- and the mismatch declined every place reached through a pointer
+/// to a pointer, because `*mut u32` and `*mut` never compare equal.
+///
+/// It is still a presentation spelling, not an identity: a pointee it does not
+/// name falls back to the bare form, so two different pointee types can share
+/// one name. Structural identity lives in `TypeId`.
+pub fn pointerSpelling(kind: PointerKind, mutability: TypeMutability, child: []const u8) []const u8 {
+    const Row = struct {
+        child: []const u8,
+        single: [3][]const u8,
+        raw_many: [3][]const u8,
+        slice: [3][]const u8,
+    };
+    const named = [_]Row{
+        .{ .child = "u8", .single = .{ "* u8", "*mut u8", "*const u8" }, .raw_many = .{ "[*] u8", "[*]mut u8", "[*]const u8" }, .slice = .{ "[] u8", "[]mut u8", "[]const u8" } },
+        .{ .child = "u16", .single = .{ "* u16", "*mut u16", "*const u16" }, .raw_many = .{ "[*] u16", "[*]mut u16", "[*]const u16" }, .slice = .{ "[] u16", "[]mut u16", "[]const u16" } },
+        .{ .child = "u32", .single = .{ "* u32", "*mut u32", "*const u32" }, .raw_many = .{ "[*] u32", "[*]mut u32", "[*]const u32" }, .slice = .{ "[] u32", "[]mut u32", "[]const u32" } },
+        .{ .child = "c_void", .single = .{ "* c_void", "*mut c_void", "*const c_void" }, .raw_many = .{ "[*] c_void", "[*]mut c_void", "[*]const c_void" }, .slice = .{ "[] c_void", "[]mut c_void", "[]const c_void" } },
+    };
+    const slot: usize = switch (mutability) {
+        .none => 0,
+        .mut => 1,
+        .@"const" => 2,
+    };
+    for (named) |row| {
+        if (!std.mem.eql(u8, row.child, child)) continue;
+        return switch (kind) {
+            .single => row.single[slot],
+            .raw_many => row.raw_many[slot],
+            .slice => row.slice[slot],
         };
     }
-    return switch (shape.kind) {
-        .single => pointerTypeText(shape.mutability),
-        .raw_many => rawManyPointerTypeText(shape.mutability),
-        .slice => sliceTypeText(shape.mutability),
+    return switch (kind) {
+        .single => pointerTypeText(mutability),
+        .raw_many => rawManyPointerTypeText(mutability),
+        .slice => sliceTypeText(mutability),
     };
 }
 
@@ -5723,6 +5745,28 @@ pub fn addressClassName(kind: AddressClass) []const u8 {
         .mmio_ptr => "MmioPtr",
         .phys_ptr => "PhysPtr",
     };
+}
+
+/// The pointer shape a `pointerSpelling` text names, or null when the text is
+/// not one of those spellings.
+///
+/// Only the spellings that kept their pointee are invertible; the bare forms
+/// dropped it, so `*mut` names no particular pointer and is not one of them.
+/// This is what lets a pointer-to-pointer's `PointerShape.child` be read back
+/// as the pointee type it spells.
+pub fn pointerShapeFromSpelling(text: []const u8) ?PointerShape {
+    const children = [_][]const u8{ "u8", "u16", "u32", "c_void" };
+    const kinds = [_]PointerKind{ .single, .raw_many, .slice };
+    const mutabilities = [_]TypeMutability{ .none, .mut, .@"const" };
+    for (children) |child| {
+        for (kinds) |kind| {
+            for (mutabilities) |mutability| {
+                if (std.mem.eql(u8, pointerSpelling(kind, mutability, child), text))
+                    return .{ .kind = kind, .mutability = mutability, .child = child };
+            }
+        }
+    }
+    return null;
 }
 
 fn isNullPointerShape(shape: PointerShape) bool {

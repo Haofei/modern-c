@@ -4582,8 +4582,8 @@ fn supportsType(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {
         .void, .never, .bool, .cstr, .address => true,
         .integer, .float => |name| primitiveType(name) != null,
         .domain_integer => |shape| primitiveType(shape.child) != null,
-        .pointer => |shape| primitiveType(shape.child) != null or isSafeIdentifier(shape.child),
-        .nullable_pointer => |shape| shape.kind != .slice and (primitiveType(shape.child) != null or isSafeIdentifier(shape.child)),
+        .pointer => |shape| pointeeSupported(body, shape.child),
+        .nullable_pointer => |shape| shape.kind != .slice and pointeeSupported(body, shape.child),
         .closed_enum, .open_enum, .struct_, .tagged_union => |name| isSafeIdentifier(name),
         .array => if (aggregateTypeForValueType(body, ty)) |shape|
             shape.array_length != null and shape.array_length.? != 0 and
@@ -4594,6 +4594,18 @@ fn supportsType(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {
         .result => resultTypeForValueType(body, ty) != null,
         else => false,
     };
+}
+
+/// Can this renderer name a pointee from its `PointerShape.child` spelling?
+///
+/// A primitive or a nominal name is the spelling itself. A pointee that is
+/// itself a pointer is spelled rather than named, and is renderable exactly
+/// when the spelling is one `pointerShapeFromSpelling` inverts -- the bare
+/// forms dropped their own pointee and cannot be recovered.
+fn pointeeSupported(body: *const mir.ExecutableBody, child: []const u8) bool {
+    if (primitiveType(child) != null or isSafeIdentifier(child)) return true;
+    const pointee = mir.pointerShapeFromSpelling(child) orelse return false;
+    return pointee.kind != .slice and supportsType(body, .{ .pointer = pointee });
 }
 
 fn supportsParameterType(body: *const mir.ExecutableBody, ty: mir.ValueType) bool {
@@ -5575,8 +5587,15 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *con
         .cstr => try out.appendSlice(allocator, "char const *"),
         .pointer, .nullable_pointer => |shape| {
             if (shape.kind == .slice) return error.UnsupportedType;
-            const child = if (std.mem.eql(u8, shape.child, "c_void")) "void" else primitiveType(shape.child) orelse shape.child;
-            try out.appendSlice(allocator, child);
+            // A pointee that is itself a pointer is spelled, not named, so it
+            // has to be rendered rather than pasted: pasting `*mut u32` in
+            // front of a `*` produced text that is not a C type at all.
+            if (mir.pointerShapeFromSpelling(shape.child)) |pointee| {
+                try appendCType(allocator, out, body, .{ .pointer = pointee });
+            } else {
+                const child = if (std.mem.eql(u8, shape.child, "c_void")) "void" else primitiveType(shape.child) orelse shape.child;
+                try out.appendSlice(allocator, child);
+            }
             try out.appendSlice(allocator, if (shape.mutability == .@"const") " const *" else " *");
         },
         .address => |class| try out.appendSlice(allocator, if (class == .mmio_ptr) "void volatile *" else "uintptr_t"),

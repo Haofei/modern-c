@@ -145,16 +145,41 @@ pointers.
 
 ### Note: the sweep gaps that are left
 
-Three `E_BACKEND_UNSUPPORTED` entries remain in
-`backend-expected-failures.json`, in two families. Largest first:
+One `E_BACKEND_UNSUPPORTED` entry remains in
+`backend-expected-failures.json`:
 
 | Family | Fixtures | What it is |
 |---|---|---|
-| pointers through arrays, slices and aliases | `data_race_semantics.mc` | **Blocked, and it is not one gap.** Deleting each failing function and re-emitting enumerates 60 of them in five families. The large one is `index` / `range_slice` over an array or slice whose elements are pointers: `executableIndexComplete` and `executableRangeSliceComplete` match the element type by `ValueType.name()`, and `pointerShapeName` renders every single pointer as `*mut`, dropping the pointee -- so the element check cannot distinguish `[]*u32` from `[]*Foo`. That is the stringly-typed `ValueType` P0 above, not a local fix; it needs the element type compared by `TypeId`. The other four: a `*T as [*]T` cast kind that neither `ExecutableCastKind.classify` nor either renderer has; an indirect call through a pointer alias copied from a parameter, declined by codegen admission as `expression `local``; a trapping store of a pointer into an aggregate field; and one `incoherent_statement` in an array-element assignment. Closed on the way past: `(&E).*`, which was refused because the builder computes no type for an `address_of` and so had none for the deref either. |
-| `incoherent_place` | `local_address_escape.mc` | |
-| `incoherent_executable_shape` | `type_arg_and_trivial_drop_reject.mc` | |
+| pointers through arrays, slices and aliases | `data_race_semantics.mc` | **Blocked, and it is not one gap.** Deleting each failing function and re-emitting enumerates 60 of them. 21 are an `index` expression over a slice whose elements are pointers: mir-build accepts those now, and the C backend's own `supportsType` admission still declines the element type. 5 more are an array of pointers reached through a pointer to it, 3 an aggregate pointer alias whose executable shape is incoherent, 1 an array-element assignment. The remaining families are a `*T as [*]T` cast kind that neither `ExecutableCastKind.classify` nor either renderer has, an indirect call through a pointer alias copied from a parameter (declined by codegen admission as `expression `local``), and a trapping store of a pointer into an aggregate field. Closed on the way past: `(&E).*`, and the slice-element rule's mir-build half. |
 
 The five `E_EXPERIMENTAL_DYN_CODEGEN` entries are policy and stay.
+
+Closed: **`incoherent_place`** (`local_address_escape.mc`). `*out = p` where
+`out: *mut *mut u32` was refused because the deref place's pointee check
+compared the pointer's `PointerShape.child` spelling against the pointee type's
+`ValueType.name()` -- and those were two different spelling rules. The syntax
+side kept the pointee for the scalar names it could name (`*mut u32`), the
+model side dropped it for everything but `c_void` (`*mut`), so a pointer to a
+pointer never compared equal to its own pointee. They are one rule now,
+`mir_model.pointerSpelling`, which `mir_syntax` renders through and
+`ValueType.name()` is; `pointerShapeFromSpelling` inverts the spellings that
+kept their pointee, which is what lets the C renderer *render* a
+pointer-to-pointer instead of pasting `*mut u32` in front of a `*`. The
+spelling is still a presentation name, not an identity: a pointee it cannot
+name falls back to the bare form.
+
+Reclassified, not fixed: **`incoherent_executable_shape`**
+(`type_arg_and_trivial_drop_reject.mc`). This is a pure `expect=compile_error`
+fixture whose two cases are both sema diagnostics. Stripping them leaves only
+the `fn type_id(comptime T: type)` template the rejected call was written to
+exercise, and an uninstantiated type-generic template is not a C-emission
+contract -- the backend emits instances, never templates. It belongs in the
+sweep's `OUT_OF_SCOPE` allowlist beside the other pure diagnostic fixtures, not
+in the backend-gap manifest, and that is where it is now. (Making
+`comptime T: type` always type-generic in `monomorphize.zig` would also make
+the chunk emit, but it moves the rejected call into the instantiation path and
+`E_TYPE_ARG_REQUIRED` stops being reported -- a real regression on the
+fixture's own contract. Measured and reverted.)
 
 Closed: **`unsupported_try`** (`hosted_io.mc`). `let f = io_open(...)?;` inside
 a `-> Result<usize, IoError>` function propagates a `Result<Fd, IoError>`. The

@@ -57,6 +57,14 @@ Not yet typed — the honest list:
 - **`ValueType` is stringly typed** (`integer: []const u8`, `struct_: []const u8`)
   and mirrored by parallel `TypeId` / `SignatureTypeId` fields; `Instruction`
   carries both `result_ty: ValueType` and `typed_result_ty: TypeId`.
+  Pointer spelling has one rule, `mir_model.pointerSpelling`: a
+  `PointerShape.child` and the pointee type's own `ValueType.name()` are the
+  same text, and `mir_syntax`'s type text renders through it. It is still a
+  presentation name, not an identity -- a pointee it cannot name (anything but
+  `u8`, `u16`, `u32`, `c_void`) falls back to the bare `*mut`, so two pointer
+  types can share one name. Structural identity remains `TypeId`, and a
+  completeness check that compares element or pointee types by `name()` is
+  still approximating one.
 - **Instruction-scoped facts are not yet fields on the typed node.** They key
   on the instruction's identity now rather than on a source span -- integer,
   float, bounds, representation, target-type, call-target, `const_get`, bind

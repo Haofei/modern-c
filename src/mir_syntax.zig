@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const mir_model = @import("mir_model.zig");
 
 pub fn exprTerminates(expr: ast.Expr) bool {
     return switch (expr.kind) {
@@ -71,100 +72,28 @@ pub fn typeText(ty: ast.TypeExpr) []const u8 {
     };
 }
 
-fn pointerTypeText(mutability: ast.Mutability) []const u8 {
+/// The pointer spellings all come from one rule, `mir_model.pointerSpelling`,
+/// so a `PointerShape.child` produced here and a `ValueType.name()` rendered
+/// from the model are the same text. They used to be two tables that disagreed
+/// about whether the pointee survives.
+fn typeMutability(mutability: ast.Mutability) mir_model.TypeMutability {
     return switch (mutability) {
-        .none => "*",
-        .mut => "*mut",
-        .@"const" => "*const",
+        .none => .none,
+        .mut => .mut,
+        .@"const" => .@"const",
     };
 }
 
 fn pointerTypeTextWithChild(mutability: ast.Mutability, child: []const u8) []const u8 {
-    if (std.mem.eql(u8, child, "u8")) return switch (mutability) {
-        .none => "* u8",
-        .mut => "*mut u8",
-        .@"const" => "*const u8",
-    };
-    if (std.mem.eql(u8, child, "u16")) return switch (mutability) {
-        .none => "* u16",
-        .mut => "*mut u16",
-        .@"const" => "*const u16",
-    };
-    if (std.mem.eql(u8, child, "u32")) return switch (mutability) {
-        .none => "* u32",
-        .mut => "*mut u32",
-        .@"const" => "*const u32",
-    };
-    if (std.mem.eql(u8, child, "c_void")) return switch (mutability) {
-        .none => "* c_void",
-        .mut => "*mut c_void",
-        .@"const" => "*const c_void",
-    };
-    return pointerTypeText(mutability);
-}
-
-fn rawManyPointerTypeText(mutability: ast.Mutability) []const u8 {
-    return switch (mutability) {
-        .none => "[*]",
-        .mut => "[*]mut",
-        .@"const" => "[*]const",
-    };
+    return mir_model.pointerSpelling(.single, typeMutability(mutability), child);
 }
 
 fn rawManyPointerTypeTextWithChild(mutability: ast.Mutability, child: []const u8) []const u8 {
-    if (std.mem.eql(u8, child, "u8")) return switch (mutability) {
-        .none => "[*] u8",
-        .mut => "[*]mut u8",
-        .@"const" => "[*]const u8",
-    };
-    if (std.mem.eql(u8, child, "u16")) return switch (mutability) {
-        .none => "[*] u16",
-        .mut => "[*]mut u16",
-        .@"const" => "[*]const u16",
-    };
-    if (std.mem.eql(u8, child, "u32")) return switch (mutability) {
-        .none => "[*] u32",
-        .mut => "[*]mut u32",
-        .@"const" => "[*]const u32",
-    };
-    if (std.mem.eql(u8, child, "c_void")) return switch (mutability) {
-        .none => "[*] c_void",
-        .mut => "[*]mut c_void",
-        .@"const" => "[*]const c_void",
-    };
-    return rawManyPointerTypeText(mutability);
-}
-
-fn sliceTypeText(mutability: ast.Mutability) []const u8 {
-    return switch (mutability) {
-        .none => "[]",
-        .mut => "[]mut",
-        .@"const" => "[]const",
-    };
+    return mir_model.pointerSpelling(.raw_many, typeMutability(mutability), child);
 }
 
 fn sliceTypeTextWithChild(mutability: ast.Mutability, child: []const u8) []const u8 {
-    if (std.mem.eql(u8, child, "u8")) return switch (mutability) {
-        .none => "[] u8",
-        .mut => "[]mut u8",
-        .@"const" => "[]const u8",
-    };
-    if (std.mem.eql(u8, child, "u16")) return switch (mutability) {
-        .none => "[] u16",
-        .mut => "[]mut u16",
-        .@"const" => "[]const u16",
-    };
-    if (std.mem.eql(u8, child, "u32")) return switch (mutability) {
-        .none => "[] u32",
-        .mut => "[]mut u32",
-        .@"const" => "[]const u32",
-    };
-    if (std.mem.eql(u8, child, "c_void")) return switch (mutability) {
-        .none => "[] c_void",
-        .mut => "[]mut c_void",
-        .@"const" => "[]const c_void",
-    };
-    return sliceTypeText(mutability);
+    return mir_model.pointerSpelling(.slice, typeMutability(mutability), child);
 }
 
 pub fn isTrapCall(callee: ast.Expr) bool {

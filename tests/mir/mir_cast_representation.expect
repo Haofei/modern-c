@@ -1,9 +1,9 @@
 # MIR target representation checks see through casts
 mode: raw
 
-+ "mir representation_fact fn=cast_pointer_return kind=representation_check detail=nonnull_pointer type=*mut value_id=cast recorded=true"
-+ "mir representation_fact fn=cast_pointer_local kind=representation_use detail=initializer type=*mut value_id=cast recorded=true"
-+ "mir representation_fact fn=cast_pointer_assignment kind=representation_use detail=assignment type=*mut value_id=cast recorded=true"
-+ "mir representation_fact fn=cast_pointer_call_arg kind=representation_use detail=call_arg type=*mut value_id=cast recorded=true"
-+ "mir representation_fact fn=cast_pointer_aggregate_field kind=representation_use detail=aggregate_field type=*mut value_id=cast recorded=true"
-+ "mir representation_fact fn=cast_pointer_aggregate_element kind=representation_use detail=aggregate_element type=*mut value_id=cast recorded=true"
++ "mir representation_fact fn=cast_pointer_return kind=representation_check detail=nonnull_pointer type=*mut u8 value_id=cast recorded=true"
++ "mir representation_fact fn=cast_pointer_local kind=representation_use detail=initializer type=*mut u8 value_id=cast recorded=true"
++ "mir representation_fact fn=cast_pointer_assignment kind=representation_use detail=assignment type=*mut u8 value_id=cast recorded=true"
++ "mir representation_fact fn=cast_pointer_call_arg kind=representation_use detail=call_arg type=*mut u8 value_id=cast recorded=true"
++ "mir representation_fact fn=cast_pointer_aggregate_field kind=representation_use detail=aggregate_field type=*mut u8 value_id=cast recorded=true"
++ "mir representation_fact fn=cast_pointer_aggregate_element kind=representation_use detail=aggregate_element type=*mut u8 value_id=cast recorded=true"
