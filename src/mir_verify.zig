@@ -1022,8 +1022,41 @@ pub fn integerFactTargetType(function: *const Function, fact: IntegerFact) ?Valu
     };
 }
 
+/// A `const_get` fact names the typed obligation its compile-time index
+/// belongs to: `ExecutableExpression.const_get_obligation`. One node, one
+/// fact, in both directions.
+///
+/// This obligation carries no payload of its own. A `const_get` is a
+/// `builtin_call` node and the index is already part of it, so the agreement
+/// the fact used to make with `Instruction.const_index` -- beside a
+/// `detail == "const_get"` string test to find the instruction at all -- is
+/// made against the node instead, and the string test is gone.
+///
+/// The instruction walk, including the source cross-check that the four
+/// instructions one `const_get` expression emits appear in equal numbers,
+/// remains only for a body the typed form does not represent: in a
+/// represented body the call-target and target-type halves carry their own
+/// typed obligations with their own exactly-one rules.
 pub fn validateConstGetFactsForLowering(module: Module) error{InvalidMirConstGetFacts}!void {
     for (module.functions) |function| {
+        const body = &function.executable_body;
+        const typed = typedObligationsRepresented(module, function);
+        if (typed) {
+            for (function.const_get_facts) |fact| {
+                if (!fact.typed_inst_id.isValid()) return error.InvalidMirConstGetFacts;
+                if (!fact.typed_span_id.isValid() or sourcePointForSpanId(function, fact.typed_span_id) == null) return error.InvalidMirConstGetFacts;
+                if (countConstGetFactsSharingIdentity(function, fact) != 1) return error.InvalidMirConstGetFacts;
+                const index = mir_model.executableConstGetObligationIndex(body, fact.typed_inst_id) orelse
+                    return error.InvalidMirConstGetFacts;
+                if (index != fact.index) return error.InvalidMirConstGetFacts;
+            }
+            for (body.expressions) |expression| {
+                if (!expression.const_get_obligation.isValid()) continue;
+                if (countConstGetFactsForObligation(function, expression.const_get_obligation) != 1)
+                    return error.InvalidMirConstGetFacts;
+            }
+            continue;
+        }
         for (function.blocks) |block| for (block.instructions) |instruction| {
             // The four instructions one `const_get` expression emits (index,
             // call target, base and result target types) are cross-checked by
@@ -1051,6 +1084,14 @@ pub fn validateConstGetFactsForLowering(module: Module) error{InvalidMirConstGet
             if (countConstGetFactsSharingIdentity(function, fact) != 1) return error.InvalidMirConstGetFacts;
         }
     }
+}
+
+fn countConstGetFactsForObligation(function: Function, id: mir_model.InstId) usize {
+    var count: usize = 0;
+    for (function.const_get_facts) |fact| {
+        if (fact.typed_inst_id.eql(id)) count += 1;
+    }
+    return count;
 }
 
 fn countConstGetCallTargetsAtSource(function: Function, span_id: SpanId) usize {

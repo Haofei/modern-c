@@ -82,7 +82,7 @@ Not yet typed — the honest list:
   | call-target | `ExecutableExpression.call_target_obligation`, or `ExecutableTerminator.call_target_obligation` for a diverging explicit trap (identity plus the `CallTargetKind`) | the typed body |
   | representation | a row of `ExecutableBody.representation_obligations`, naming the node that owns it | the typed body |
   | range | `ExecutableExpression.range_obligation` (region, span, result type and the typed operation) | the typed body |
-  | const_get | -- | the instruction stream |
+  | const_get | `ExecutableExpression.const_get_obligation`; the index is the node's own `builtin_call.const_index` | the typed body |
   | bind thunk | -- | the instruction stream |
 
   A family whose verifier reads the typed body may still fall back to the

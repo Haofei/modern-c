@@ -98,7 +98,7 @@ that the typed body does not represent as a node at all:
 | Family | Instruction kind its fact joins on | Joins a typed node? |
 |---|---|---|
 | bounds | `cmp_bounds` | **Done.** Joins `index.bounds_obligation` / `range_slice.bounds_obligation` on the typed node; see below. |
-| const_get | `index` with `detail == "const_get"` | No. Also still a `detail` string test. |
+| const_get | `index` with `detail == "const_get"` | **Done.** Joins `ExecutableExpression.const_get_obligation`; the index is already on the node and the `detail` test is gone. |
 | integer literal | `integer_literal_conversion`, agreeing on `detail` (the literal spelling) | **Done.** Joins `ExecutableExpression.literal_conversion`; the spelling agreement is gone. |
 | float literal | `expr` with `detail == "float"` | **Done.** Shares `ExecutableExpression.literal_conversion` with the integer family. |
 | representation | `representation_check` / `representation_use`, agreeing on `kind` and `detail` | **Done.** Joins a row of `ExecutableBody.representation_obligations`; the `detail` agreement is gone. |
@@ -272,6 +272,17 @@ the contract region, the span, the result `TypeId`, and the operation as
 `ExecutableUncheckedOp` -- the typed form of `RangeFact.op`, which is still
 text in the legacy table, so that one agreement crosses `@tagName` until the
 fact is typed too.
+
+**The `const_get` family needed no payload at all.** Its obligation is an
+identity and nothing else: a `const_get` is a `builtin_call` node and the
+compile-time index is already part of it, so the agreement the fact used to
+make with `Instruction.const_index` is made against the node, and the
+`detail == "const_get"` test that found the instruction in the first place is
+gone. The source cross-check that the four instructions one `const_get`
+expression emits appear in equal numbers goes with it in a represented body:
+the call-target and target-type halves now carry their own typed obligations
+with their own exactly-one rules, so counting them by span proves nothing
+extra.
 
 **What moved and what was dropped.** Everything
 `targetTypeFactAgreesWithInstruction` checked -- `target_index`, target owner,

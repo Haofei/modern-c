@@ -8879,6 +8879,33 @@ test "MIR rejects duplicate call target facts" {
     try std.testing.expectError(error.InvalidMirCallTargetFacts, mir.validateCallTargetFactsForLowering(typed_mir));
 }
 
+/// Append a copy of the typed `const_get` node named by `id`, retargeting
+/// both obligations it carries: the compile-time index and the call target.
+fn cloneConstGetNode(
+    function: *mir.Function,
+    allocator: std.mem.Allocator,
+    id: mir.InstId,
+    index_copy_id: mir.InstId,
+    call_copy_id: mir.InstId,
+) !void {
+    const body = &function.executable_body;
+    for (body.expressions) |expression| {
+        if (!expression.const_get_obligation.eql(id)) continue;
+        const expressions = try allocator.alloc(mir.ExecutableExpression, body.expressions.len + 1);
+        @memcpy(expressions[0..body.expressions.len], body.expressions);
+        var copy = expression;
+        copy.id = mir.ExprId.fromIndex(body.expressions.len);
+        copy.inst_id = .invalid;
+        copy.const_get_obligation = index_copy_id;
+        if (copy.call_target_obligation) |*obligation| obligation.id = call_copy_id;
+        expressions[body.expressions.len] = copy;
+        allocator.free(body.expressions);
+        body.expressions = expressions;
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 /// Append a copy of the typed expression carrying the range obligation named
 /// by `id`, giving the copy `copy_id` as its own obligation. The copy keeps
 /// the original's span -- what a copied AST node produces.
@@ -9063,9 +9090,11 @@ test "target type facts distinguish two targets that share one span" {
 }
 
 test "const_get facts distinguish two accesses that share one span" {
-    // One `const_get` expression emits four instructions at one span. Copy
-    // all four under fresh identities, with their facts: admitted, because
-    // each fact names its own instruction.
+    // One `const_get` expression carries four obligations at one span: the
+    // compile-time index and the call target, both on the `builtin_call`
+    // node, and the base and result target types. Copy all four under fresh
+    // identities, with their facts: admitted, because each fact names its own
+    // obligation.
     const source =
         \\fn get_word(values: [3]u32) -> u32 { return values.const_get<2>(); }
     ;
@@ -9079,21 +9108,19 @@ test "const_get facts distinguish two accesses that share one span" {
     const original_fact = function.const_get_facts[0];
     try std.testing.expect(original_fact.typed_inst_id.isValid());
 
-    const index_copy_id = freshInstId(function);
-    const original_inst_id = try cloneInstructionWithInstId(function, std.testing.allocator, .index, "const_get", index_copy_id);
-    try std.testing.expect(original_inst_id.eql(original_fact.typed_inst_id));
-    // The const_get family still counts `call_target const_get` instructions
-    // against `index const_get` ones, so the copy needs both forms: the
-    // instruction for that count, and the typed obligation the call-target
-    // fact now joins on.
-    const call_copy_id = freshInstId(function);
-    _ = try cloneInstructionWithInstId(function, std.testing.allocator, .call_target, "const_get", call_copy_id);
-    try cloneCallTargetObligationNode(function, typed_mir.allocator, call_copy_id);
-    const base_copy_id = freshInstId(function);
-    _ = try cloneInstructionWithInstId(function, std.testing.allocator, .target_type, "const_get_base", base_copy_id);
+    // Four fresh identities. None of the copies adds an instruction any more,
+    // so they cannot be read back off the stream and are taken in sequence.
+    const first_copy = freshInstId(function).index();
+    const index_copy_id = mir.InstId.fromIndex(first_copy);
+    const call_copy_id = mir.InstId.fromIndex(first_copy + 1);
+    const base_copy_id = mir.InstId.fromIndex(first_copy + 2);
+    const result_copy_id = mir.InstId.fromIndex(first_copy + 3);
+    const original_inst_id = original_fact.typed_inst_id;
+    // The index and the call target sit on one node, so one copy carries
+    // both -- copying the node without retargeting the second would leave two
+    // nodes naming the original call target.
+    try cloneConstGetNode(function, typed_mir.allocator, original_inst_id, index_copy_id, call_copy_id);
     try cloneTargetTypeObligation(function, typed_mir.allocator, .const_get_base, base_copy_id);
-    const result_copy_id = freshInstId(function);
-    _ = try cloneInstructionWithInstId(function, std.testing.allocator, .target_type, "const_get_result", result_copy_id);
     try cloneTargetTypeObligation(function, typed_mir.allocator, .const_get_result, result_copy_id);
 
     const facts = try std.testing.allocator.alloc(mir.ConstGetFact, 2);
@@ -9113,7 +9140,7 @@ test "const_get facts distinguish two accesses that share one span" {
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 
-    // Duplicate: both const_get facts name one index instruction.
+    // Duplicate: both const_get facts name one obligation.
     function.const_get_facts[1].typed_inst_id = original_inst_id;
     try std.testing.expectError(error.InvalidMirConstGetFacts, mir.validateConstGetFactsForLowering(typed_mir));
 

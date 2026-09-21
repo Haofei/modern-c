@@ -13816,7 +13816,9 @@ pub const FunctionBuilder = struct {
                     try self.addCallTargetFact(.const_get, target.result_ty, node.callee.*.span);
                     try self.appendTargetTypeFact(.const_get_base, target.base_type_expr, target.base_ty, expr.span);
                     try self.appendTargetTypeFact(.const_get_result, target.result_type_expr, target.result_ty, expr.span);
-                    try self.const_get_facts.append(self.allocator, .{ .index = target.index, .typed_inst_id = const_get_inst_id, .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)) });
+                    const const_get_span_id = try self.internSpanId(self.sourcePoint(expr.span));
+                    try self.const_get_facts.append(self.allocator, .{ .index = target.index, .typed_inst_id = const_get_inst_id, .typed_span_id = const_get_span_id });
+                    self.recordExecutableConstGetObligation(const_get_inst_id, const_get_span_id);
                     if (representationCheckKind(target.result_ty) != null) {
                         try self.addInstr(.typed_load, exprText(expr), target.result_ty, expr.span);
                         try self.addRuntimeRepresentationCheck(target.result_ty, expr.span, exprText(expr));
@@ -15427,6 +15429,25 @@ pub const FunctionBuilder = struct {
         for (self.executable_expressions.items) |*expression| {
             if (!expression.span_id.eql(span_id) or expression.range_obligation != null) continue;
             expression.range_obligation = obligation;
+            return;
+        }
+    }
+
+    /// Record the compile-time-index obligation on the typed `const_get`
+    /// node, so a `ConstGetFact` joins a node in `ExecutableBody` rather than
+    /// an `index` instruction recognised by `detail == "const_get"`.
+    ///
+    /// The index needs no copy: the node already carries it as
+    /// `builtin_call.const_index`, which is what the fact must agree with.
+    fn recordExecutableConstGetObligation(self: *FunctionBuilder, inst_id: InstId, span_id: SpanId) void {
+        if (!inst_id.isValid()) return;
+        for (self.executable_expressions.items) |*expression| {
+            if (!expression.span_id.eql(span_id) or expression.const_get_obligation.isValid()) continue;
+            switch (expression.operation) {
+                .builtin_call => |builtin| if (builtin.kind != .const_get) continue,
+                else => continue,
+            }
+            expression.const_get_obligation = inst_id;
             return;
         }
     }

@@ -1348,6 +1348,11 @@ pub const ExecutableExpression = struct {
     /// The no-overflow range obligation this node owns, or null. A `RangeFact`
     /// names it; see `ExecutableRangeObligation`.
     range_obligation: ?ExecutableRangeObligation = null,
+    /// Identity of the compile-time-index obligation this node owns, for a
+    /// `const_get` builtin. A `ConstGetFact` names it; the index itself is
+    /// already on the node, in `builtin_call.const_index`, so the obligation is an
+    /// identity and nothing else.
+    const_get_obligation: InstId = .invalid,
     span_id: SpanId = .invalid,
     result_ty: ValueType,
     type_id: TypeId = .invalid,
@@ -2722,6 +2727,39 @@ pub fn executableRepresentationObligation(body: *const ExecutableBody, id: InstI
         found = obligation;
     }
     return found;
+}
+
+/// The compile-time index a typed node carries for the `const_get`
+/// obligation named by `id`, or null when no node or more than one carries
+/// it.
+///
+/// Unlike the other families this obligation needs no payload of its own: a
+/// `const_get` is a `builtin_call` operation and the index is already part of it,
+/// which is exactly the agreement a `ConstGetFact` used to make with
+/// `Instruction.const_index` beside a `detail == "const_get"` string test.
+pub fn executableConstGetObligationIndex(body: *const ExecutableBody, id: InstId) ?usize {
+    if (!id.isValid()) return null;
+    var found: ?usize = null;
+    for (body.expressions) |expression| {
+        if (!expression.const_get_obligation.eql(id)) continue;
+        const index = switch (expression.operation) {
+            .builtin_call => |builtin| if (builtin.kind == .const_get) builtin.const_index else null,
+            else => null,
+        } orelse return null;
+        if (found != null) return null;
+        found = index;
+    }
+    return found;
+}
+
+/// How many typed nodes carry `id` as their `const_get` obligation.
+pub fn executableConstGetObligationCount(body: *const ExecutableBody, id: InstId) usize {
+    if (!id.isValid()) return 0;
+    var count: usize = 0;
+    for (body.expressions) |expression| {
+        if (expression.const_get_obligation.eql(id)) count += 1;
+    }
+    return count;
 }
 
 /// The unchecked arithmetic a `no_overflow` contract region proves.
