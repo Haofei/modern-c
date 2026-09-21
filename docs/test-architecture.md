@@ -88,10 +88,27 @@ Beyond the outcome, a fixture (or its manifest row) carries the axes a gate must
 - The `// SPEC:` headers across `tests/spec/*.mc` — the conformance manifest, read by
   `src/spec_tests.zig`.
 - `tests/mir/<name>.mc` plus `tests/mir/<name>.expect` — the MIR dump corpus, walked by the
-  one table-driven test in `src/mir_fixture_tests.zig`. An `.expect` line is `+ "needle"`
-  (must appear), `- "needle"` (must not), or `= <n> "needle"` (must appear exactly n times);
-  `mode: raw|resolved|checked` names how far the front end runs before the dump is taken.
-  A new MIR dump expectation is two files here, not another golden string in the unit suite.
+  one table-driven test in `src/mir_fixture_tests.zig`.
+- `tests/mir_verify/<name>.mc` plus `tests/mir_verify/<name>.expect` — the MIR
+  **verification-fact** corpus, walked by the one table-driven test in
+  `src/mir_verify_fixture_tests.zig`. The text a rule matches is the verifier's findings
+  (`mir verify fn=… pass=… finding=…`, one line per fact) followed by its diagnostics
+  (`mir diagnostic <message>`, one line each). Both are in one text on purpose: the facts say
+  what the verifier *found*, the diagnostics say what it *reported*, and a finding that stops
+  being reported is a real regression, so a fixture asserts both halves the way the in-Zig
+  test it replaced did.
+
+  Both corpora share one `.expect` grammar, in `src/fixture_expect.zig`. A line is
+  `+ "needle"` (must appear), `- "needle"` (must not), `= <n> "needle"` (exactly n times), or
+  `>= <n> "needle"` (at least n times); `mode: raw|resolved|checked` names how far the front
+  end runs before the dump is taken. A new MIR dump or verification expectation is two files
+  in the matching directory, not another golden string in the unit suite.
+
+  What stays in Zig beside these corpora is only what a dump cannot say: a module built or
+  mutated by hand (no MC source produces it), and an assertion about the built MIR that the
+  dump does not print — a `mmio_check` instruction in the stream, a range fact's `result_ty`.
+  Those tests read their program from the fixture rather than keeping a second copy of it,
+  and each says in a comment why it is not a fixture.
 - Backend parity is encoded by the `llvm-*` twin gates (a C gate and its LLVM counterpart):
   parity means **same fixture, both backends, behavior agrees**, validated behaviorally by
   `diff-backend` and the differential fuzzers — not an artifact diff of emitted C vs IR.
@@ -107,9 +124,10 @@ Beyond the outcome, a fixture (or its manifest row) carries the axes a gate must
 3. **A runtime/driver behavior** → a row in `tools/lib/host-tests.tsv` (host) and/or a QEMU gate.
 4. **A regression found by fuzzing** → distill it to a minimal fixture in the matching corpus,
    so it is locked in deterministically.
-5. **A MIR dump expectation** → a `tests/mir/` fixture pair. Keep an in-Zig dump assertion only
-   when the dump is taken over a module the test built or mutated by hand, which no MC source
-   produces.
+5. **A MIR dump expectation** → a `tests/mir/` fixture pair; **a MIR verifier expectation**
+   (a finding, a diagnostic, or the exact count of either) → a `tests/mir_verify/` pair. Keep
+   an in-Zig assertion only when the module is built or mutated by hand, which no MC source
+   produces, or when what is asserted is not in the dump at all.
 
 Whatever the layer: declare the contract (arch/profile/outcome) in the fixture, and the gate
 will honor it.

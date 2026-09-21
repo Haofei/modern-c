@@ -1,0 +1,15 @@
+# MIR verifier reports arithmetic-domain misuse
+mode: raw
+
++ "mir verify fn=reject_wrap_checked_mix pass=core finding=arith_policy_mix"
++ "mir verify fn=reject_sat_bitwise pass=core finding=bitwise_arith_domain_operand"
++ "mir verify fn=reject_wrap_div pass=core finding=arith_domain_division"
++ "mir verify fn=reject_serial_checked_mix pass=core finding=arith_policy_mix"
++ "mir verify fn=reject_counter_bitwise pass=core finding=bitwise_arith_domain_operand"
++ "mir verify fn=reject_cast_wrap_checked_mix pass=core finding=arith_policy_mix"
++ "mir verify fn=reject_cast_sat_bitwise pass=core finding=bitwise_arith_domain_operand"
+
+# the verifier must also REPORT each finding, not merely record it
++ "E_ARITH_POLICY_MIX"
++ "E_ARITH_DOMAIN_DIVISION"
+>= 2 "E_BITWISE_ARITH_DOMAIN_OPERAND"

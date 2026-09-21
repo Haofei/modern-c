@@ -1,0 +1,11 @@
+# MIR verifier accepts Result locals handled by try if-let-else and switch
+mode: raw
+
+- "pass=result finding=unhandled_result"
++ "mir verify fn=accept_handled_result_local pass=result finding=try_handled"
++ "mir verify fn=accept_array_literal_result_local pass=result finding=try_handled"
++ "mir verify fn=accept_struct_literal_result_local pass=result finding=try_handled"
++ "mir verify fn=accept_switch_arm_body_result_local pass=result finding=try_handled"
+
+# every handling form here is accepted, so nothing is reported
+- "mir diagnostic "

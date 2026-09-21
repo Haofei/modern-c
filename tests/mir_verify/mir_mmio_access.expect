@@ -1,0 +1,9 @@
+# MIR verifier enforces typed MMIO register access modes
+mode: raw
+
++ "mir verify fn=reject_read_write_only pass=mmio finding=access_forbidden op=read"
++ "mir verify fn=reject_write_read_only pass=mmio finding=access_forbidden op=write"
+- "mir verify fn=accept_read_write pass=mmio finding=access_forbidden"
+
+# reported diagnostics: exactly the two forbidden accesses
+= 2 "E_MMIO_ACCESS_FORBIDDEN"

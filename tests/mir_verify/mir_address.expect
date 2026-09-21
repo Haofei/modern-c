@@ -1,0 +1,15 @@
+# MIR verifier reports address-class deref and operations
+mode: raw
+
++ "mir verify fn=reject_paddr_deref pass=address finding=direct_deref class=PAddr"
++ "mir verify fn=reject_call_deref pass=address finding=direct_deref class=PAddr"
++ "mir verify fn=reject_paddr_arithmetic pass=address finding=opaque_operation detail=add"
+
+# reported diagnostics: one per address class, plus the opaque operation
++ "E_PADDR_DEREF"
++ "E_VADDR_DEREF"
++ "E_USER_PTR_DEREF"
++ "E_MMIO_PTR_DEREF"
++ "E_DMA_ADDR_DEREF"
++ "E_PHYS_PTR_DEREF"
++ "E_ADDRESS_CLASS_OPERATION"

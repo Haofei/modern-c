@@ -1,0 +1,17 @@
+# MIR context verifier handles extern irq callees and ordinary store name
+mode: raw
+
++ "mir verify fn=rejected_store_name pass=context finding=irq_call detail=store"
++ "mir verify fn=rejected_blocking pass=context finding=irq_blocking detail=lock.acquire"
++ "mir verify fn=rejected_blocking pass=context finding=irq_blocking detail=heap.alloc"
++ "mir verify fn=rejected_blocking pass=context finding=irq_blocking detail=device.wait_irq"
++ "mir verify fn=rejected_blocking pass=context finding=irq_blocking detail=fs.read"
+- "mir verify fn=accepted_irq pass=context finding=irq_call detail=irq_poll"
+- "mir verify fn=accepted_atomic pass=context finding=irq_call"
+- "mir verify fn=accepted_mmio pass=context finding=irq_call"
+- "mir verify fn=accepted_builtins pass=context finding=irq_call"
+
+# reported diagnostics, and nothing else: five in total
+= 1 "E_IRQ_CONTEXT_CALL"
+= 4 "E_IRQ_CONTEXT_BLOCKING"
+= 5 "mir diagnostic "

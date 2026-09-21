@@ -1,0 +1,35 @@
+# MIR verifier reports Result try payload return mismatches
+mode: raw
+
+- "mir verify fn=accept_result_try_payload pass=result finding=try_payload_type_mismatch"
+- "mir verify fn=accept_result_pointer_try_payload pass=result finding=try_payload_"
+- "mir verify fn=accept_nullable_pointer_try_payload pass=result finding=try_payload_"
++ "mir verify fn=accept_result_pointer_try_payload pass=representation finding=representation_use detail=try_unwrap type=*mut"
++ "mir verify fn=accept_nullable_pointer_try_payload pass=representation finding=representation_use detail=try_unwrap type=*mut"
++ "mir verify fn=reject_result_try_payload pass=result finding=try_payload_type_mismatch"
++ "mir verify fn=reject_pointer_payload_to_integer pass=result finding=try_payload_type_mismatch"
+- "mir verify fn=accept_result_pointer_payload_const_narrow pass=result finding=try_payload_"
+- "mir verify fn=accept_nullable_pointer_payload_const_narrow pass=result finding=try_payload_"
+- "mir verify fn=accept_result_try_local_initializer_const_narrow pass=result finding=try_payload_"
+- "mir verify fn=accept_result_try_assignment_const_narrow pass=result finding=try_payload_"
+- "mir verify fn=accept_result_try_call_arg_const_narrow pass=result finding=try_payload_"
+- "mir verify fn=accept_result_try_aggregate_field_const_narrow pass=result finding=try_payload_"
+- "mir verify fn=accept_cast_result_try_payload_const_narrow pass=result finding=try_payload_"
+- "mir verify fn=accept_cast_result_try_local_initializer_const_narrow pass=result finding=try_payload_"
+- "mir verify fn=accept_cast_result_try_assignment_const_narrow pass=result finding=try_payload_"
+- "mir verify fn=accept_cast_result_try_call_arg_const_narrow pass=result finding=try_payload_"
+- "mir verify fn=accept_cast_result_try_aggregate_field_const_narrow pass=result finding=try_payload_"
++ "mir verify fn=reject_result_pointer_payload_element_conversion pass=result finding=try_payload_pointer_conversion"
++ "mir verify fn=reject_result_c_void_payload_conversion pass=result finding=try_payload_c_void_conversion"
++ "mir verify fn=reject_result_typed_to_c_void_payload_conversion pass=result finding=try_payload_c_void_conversion"
++ "mir verify fn=reject_nullable_c_void_payload_conversion pass=result finding=try_payload_c_void_conversion"
++ "mir verify fn=reject_inferred_result_array_try_index pass=conversion finding=return_type_mismatch source_type=u8"
++ "mir verify fn=reject_if_let_result_array_binding pass=conversion finding=return_type_mismatch source_type=u8"
++ "mir verify fn=reject_switch_result_array_binding pass=conversion finding=return_type_mismatch source_type=u8"
+
+# reported diagnostics, exactly. G30: the mut->const try-payload narrows
+# are allowed, so only the genuine element mismatch (`*mut u8` ->
+# `*mut u16`) is left as a pointer-conversion diagnostic.
+= 5 "E_RETURN_TYPE_MISMATCH"
+= 1 "E_NO_IMPLICIT_POINTER_CONVERSION"
+= 3 "E_C_VOID_CONVERSION"

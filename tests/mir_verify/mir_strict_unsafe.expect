@@ -1,0 +1,11 @@
+# MIR verifier reports strict unsafe effects outside unsafe blocks
+mode: raw
+
++ "mir verify fn=reject_raw_store pass=unsafe finding=unsafe_required detail=raw.store"
++ "mir verify fn=reject_mmio_map pass=unsafe finding=unsafe_required detail=mmio.map"
++ "mir verify fn=reject_asm pass=unsafe finding=unsafe_required detail=asm.opaque"
++ "mir verify fn=reject_raw_many_deref pass=unsafe finding=unsafe_required detail=raw_many.deref"
+- "mir verify fn=accept_unsafe_effects pass=unsafe finding=unsafe_required"
+
+# reported diagnostics: exactly the four rejected effects
+= 4 "E_UNSAFE_REQUIRED"

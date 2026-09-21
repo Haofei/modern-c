@@ -1,0 +1,21 @@
+# MIR verifier validates typed global aggregate initializers
+mode: raw
+
+- "mir verify fn=ok_bytes pass=conversion"
+- "mir verify fn=ok_bytes pass=aggregate"
+- "mir verify fn=ok_raw_flags pass=conversion"
++ "mir verify fn=reject_global_array_element pass=conversion finding=integer_literal_out_of_range source_type=comptime_int"
++ "mir verify fn=reject_global_array_shape pass=aggregate finding=array_literal_length type=array"
++ "mir verify fn=reject_global_struct_fields pass=conversion finding=integer_literal_out_of_range source_type=comptime_int"
++ "mir verify fn=reject_global_struct_fields pass=nullability finding=null_to_nonnull"
++ "mir verify fn=reject_global_struct_missing pass=aggregate finding=struct_literal_missing_field type=GlobalPacket"
++ "mir verify fn=reject_global_flags_type pass=conversion finding=initializer_type_mismatch source_type=comptime_int"
++ "mir verify fn=reject_global_flags_missing pass=aggregate finding=struct_literal_missing_field type=GlobalFlags"
++ "mir verify fn=reject_raw_flags_range pass=conversion finding=integer_literal_out_of_range source_type=comptime_int"
+
+# reported diagnostics
++ "E_INTEGER_LITERAL_OUT_OF_RANGE"
++ "E_ARRAY_LITERAL_LENGTH"
++ "E_NULL_NON_NULL_POINTER"
++ "E_STRUCT_LITERAL_MISSING_FIELD"
++ "E_NO_IMPLICIT_CONVERSION"

@@ -6,96 +6,27 @@
 //! in-Zig golden string, and a representation change is one fixture edit
 //! instead of a rewrite of the unit suite.
 //!
-//! `.expect` grammar, one rule per line:
-//!
-//! ```text
-//! # free-form comment
-//! mode: raw | resolved | checked     how far the front end runs (default raw)
-//! + "needle"                         the dump must contain this substring
-//! - "needle"                         the dump must not contain it
-//! = 4 "needle"                       it must occur exactly four times
-//! ```
-//!
-//! The needle is everything between the first and last `"` on the line, so a
-//! trailing space inside a needle survives a whitespace-trimming editor.
-//! `mode` selects the pipeline the dump is taken from:
-//!
-//! - `raw`: parse only, the shape `parser.Parser.parseModule` produces.
-//! - `resolved`: parse plus qualified-name resolution.
-//! - `checked`: `resolved` plus a full `sema` pass over the declarations.
-//!
-//! The mode matters because the MIR builder reads what the front end left
-//! behind, so a fixture must name the stage its expectations were taken at.
+//! The `.expect` grammar, and the walk that applies it, live in
+//! `fixture_expect.zig`, which the MIR *verification-fact* corpus
+//! (`tests/mir_verify/`, see `mir_verify_fixture_tests.zig`) shares. The two
+//! corpora differ only in which dump they take of the fixture.
 
 const std = @import("std");
 
 const diagnostics = @import("diagnostics.zig");
+const fixture_expect = @import("fixture_expect.zig");
 const mir = @import("mir.zig");
 const parser = @import("parser.zig");
 const test_support = @import("test_support.zig");
 
 const fixture_dir = "tests/mir";
 
-const Mode = enum { raw, resolved, checked };
-
-const Rule = union(enum) {
-    present: []const u8,
-    absent: []const u8,
-    count: struct { n: usize, needle: []const u8 },
-};
-
-const Expectations = struct {
-    mode: Mode,
-    rules: std.ArrayList(Rule),
-
-    fn deinit(self: *Expectations, allocator: std.mem.Allocator) void {
-        self.rules.deinit(allocator);
-    }
-};
-
-/// The text between the first and last `"` of a rule line.
-fn quoted(line: []const u8) ?[]const u8 {
-    const open = std.mem.indexOfScalar(u8, line, '"') orelse return null;
-    const close = std.mem.lastIndexOfScalar(u8, line, '"') orelse return null;
-    if (close <= open) return null;
-    return line[open + 1 .. close];
-}
-
-fn parseExpectations(allocator: std.mem.Allocator, text: []const u8) !Expectations {
-    var result = Expectations{ .mode = .raw, .rules = .empty };
-    errdefer result.rules.deinit(allocator);
-
-    var it = std.mem.splitScalar(u8, text, '\n');
-    while (it.next()) |raw_line| {
-        const line = std.mem.trimEnd(u8, raw_line, " \r\t");
-        if (line.len == 0 or line[0] == '#') continue;
-        if (std.mem.startsWith(u8, line, "mode:")) {
-            const value = std.mem.trim(u8, line["mode:".len..], " ");
-            result.mode = std.meta.stringToEnum(Mode, value) orelse return error.UnknownFixtureMode;
-            continue;
-        }
-        switch (line[0]) {
-            '+' => try result.rules.append(allocator, .{ .present = quoted(line) orelse return error.MalformedFixtureRule }),
-            '-' => try result.rules.append(allocator, .{ .absent = quoted(line) orelse return error.MalformedFixtureRule }),
-            '=' => {
-                const needle = quoted(line) orelse return error.MalformedFixtureRule;
-                const digits = std.mem.trim(u8, line[1..std.mem.indexOfScalar(u8, line, '"').?], " ");
-                const n = std.fmt.parseUnsigned(usize, digits, 10) catch return error.MalformedFixtureRule;
-                try result.rules.append(allocator, .{ .count = .{ .n = n, .needle = needle } });
-            },
-            else => return error.MalformedFixtureRule,
-        }
-    }
-    if (result.rules.items.len == 0) return error.EmptyFixtureExpectations;
-    return result;
-}
-
 /// Build the MIR dump for one fixture at the stage its `.expect` names.
 fn appendFixtureDump(
     allocator: std.mem.Allocator,
     name: []const u8,
     source: []const u8,
-    mode: Mode,
+    mode: fixture_expect.Mode,
     out: *std.ArrayList(u8),
 ) !void {
     switch (mode) {
@@ -133,23 +64,11 @@ test "MIR dump fixtures match their expected rows" {
         for (names.items) |name| allocator.free(name);
         names.deinit(allocator);
     }
-
-    var walker = try dir.walk(allocator);
-    defer walker.deinit();
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.basename, ".expect")) continue;
-        try names.append(allocator, try allocator.dupe(u8, entry.path));
-    }
+    try fixture_expect.collect(allocator, io, dir, &names);
 
     // Anti-vacuity: an empty or mislaid fixture directory is a failure, not a
     // silently passing gate.
     try std.testing.expect(names.items.len >= 20);
-    std.mem.sort([]const u8, names.items, {}, struct {
-        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.lessThan(u8, a, b);
-        }
-    }.lessThan);
 
     var ok = true;
     for (names.items) |expect_path| {
@@ -166,30 +85,14 @@ test "MIR dump fixtures match their expected rows" {
         };
         defer allocator.free(source);
 
-        var expectations = try parseExpectations(allocator, expect_text);
+        var expectations = try fixture_expect.parse(allocator, expect_text);
         defer expectations.deinit(allocator);
 
         var dump: std.ArrayList(u8) = .empty;
         defer dump.deinit(allocator);
         try appendFixtureDump(allocator, source_path, source, expectations.mode, &dump);
 
-        for (expectations.rules.items) |rule| {
-            const failed = switch (rule) {
-                .present => |needle| std.mem.indexOf(u8, dump.items, needle) == null,
-                .absent => |needle| std.mem.indexOf(u8, dump.items, needle) != null,
-                .count => |c| std.mem.count(u8, dump.items, c.needle) != c.n,
-            };
-            if (!failed) continue;
-            ok = false;
-            switch (rule) {
-                .present => |needle| std.debug.print("mir fixture {s}: missing \"{s}\"\n", .{ source_path, needle }),
-                .absent => |needle| std.debug.print("mir fixture {s}: unexpected \"{s}\"\n", .{ source_path, needle }),
-                .count => |c| std.debug.print(
-                    "mir fixture {s}: \"{s}\" occurs {d} times, expected {d}\n",
-                    .{ source_path, c.needle, std.mem.count(u8, dump.items, c.needle), c.n },
-                ),
-            }
-        }
+        if (!fixture_expect.check(source_path, dump.items, expectations.rules.items)) ok = false;
     }
 
     try std.testing.expect(ok);

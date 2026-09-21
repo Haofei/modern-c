@@ -1,0 +1,19 @@
+# MIR verifier reports invalid assignment targets for immutable locals and const views
+mode: raw
+
+- "mir verify fn=accept_assign_to_var pass=core finding=assign_"
++ "mir verify fn=reject_assign_to_let pass=core finding=assign_to_immutable_local"
++ "mir verify fn=reject_assign_to_param pass=core finding=assign_to_immutable_local"
++ "mir verify fn=reject_assign_to_param_field pass=core finding=assign_to_immutable_local"
++ "mir verify fn=reject_assign_to_let_array_element pass=core finding=assign_to_immutable_local"
++ "mir verify fn=reject_assign_through_const_pointer pass=core finding=assign_through_const_view"
++ "mir verify fn=reject_assign_through_const_slice pass=core finding=assign_through_const_view"
++ "mir verify fn=reject_assign_field_through_const_pointer pass=core finding=assign_through_const_view"
++ "mir verify fn=reject_assign_through_cast_const_pointer pass=core finding=assign_through_const_view"
++ "mir verify fn=reject_assign_through_cast_const_raw_many pass=core finding=assign_through_const_view"
++ "mir verify fn=reject_assign_through_cast_const_slice pass=core finding=assign_through_const_view"
++ "mir verify fn=reject_assign_field_through_cast_const_pointer pass=core finding=assign_through_const_view"
+
+# reported diagnostics
++ "E_ASSIGN_TO_IMMUTABLE_LOCAL"
++ "E_ASSIGN_THROUGH_CONST_VIEW"

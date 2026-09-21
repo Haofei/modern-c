@@ -1,0 +1,14 @@
+# MIR verifier reports address-class conversion mismatches
+mode: raw
+
++ "mir verify fn=reject_dma_addr_return pass=address finding=address_class_mismatch source=DmaAddr target=PAddr"
++ "mir verify fn=reject_dma_addr_as_vaddr pass=address finding=address_class_mismatch source=DmaAddr target=VAddr"
++ "mir verify fn=reject_paddr_as_vaddr pass=address finding=address_class_mismatch source=PAddr target=VAddr"
++ "mir verify fn=reject_dma_addr_local pass=address finding=address_class_mismatch source=DmaAddr target=PAddr"
++ "mir verify fn=reject_dma_addr_assignment pass=address finding=address_class_mismatch source=DmaAddr target=PAddr"
++ "mir verify fn=reject_dma_addr_call_arg pass=address finding=address_class_mismatch source=DmaAddr target=PAddr"
+
+# reported diagnostics
++ "E_DMA_ADDR_NOT_PADDR"
++ "E_DMA_ADDR_NOT_VADDR"
++ "E_ADDRESS_CLASS_MISMATCH"

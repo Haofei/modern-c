@@ -1,0 +1,10 @@
+# MIR verifier reports unhandled Result expressions and locals
+mode: raw
+
++ "mir verify fn=reject_unhandled_result_statement pass=result finding=unhandled_result"
++ "mir verify fn=reject_unhandled_result_local pass=result finding=unhandled_result"
++ "mir verify fn=reject_defer_unhandled_result pass=result finding=unhandled_result"
++ "mir verify fn=reject_switch_arm_unhandled_result pass=result finding=unhandled_result"
+
+# reported diagnostics
+>= 4 "E_UNHANDLED_RESULT"

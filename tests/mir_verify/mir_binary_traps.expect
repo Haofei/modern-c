@@ -1,0 +1,27 @@
+# MIR records complete checked binary trap edges for division remainder and shifts
+mode: raw
+
++ "mir verify fn=signed_div pass=trap finding=trap_edge detail=DivideByZero"
++ "mir verify fn=signed_div pass=trap finding=trap_edge detail=IntegerOverflow"
++ "mir verify fn=checked_shl pass=trap finding=trap_edge detail=InvalidShift"
++ "mir verify fn=checked_shl pass=trap finding=trap_edge detail=IntegerOverflow"
++ "mir verify fn=checked_shr pass=trap finding=trap_edge detail=InvalidShift"
+
+# Exactly which trap edges each checked binary carries. These were
+# `countTrapEdges` calls over the built MIR; a trap edge is a verification
+# fact, so the count is the count of its fact line.
+= 1 "fn=unsigned_div pass=trap finding=trap_edge detail=DivideByZero"
+- "fn=unsigned_div pass=trap finding=trap_edge detail=IntegerOverflow"
+= 1 "fn=unsigned_rem pass=trap finding=trap_edge detail=DivideByZero"
+- "fn=unsigned_rem pass=trap finding=trap_edge detail=IntegerOverflow"
+= 1 "fn=signed_div pass=trap finding=trap_edge detail=DivideByZero"
+= 1 "fn=signed_div pass=trap finding=trap_edge detail=IntegerOverflow"
+= 1 "fn=signed_rem pass=trap finding=trap_edge detail=DivideByZero"
+= 1 "fn=signed_rem pass=trap finding=trap_edge detail=IntegerOverflow"
+= 1 "fn=checked_shl pass=trap finding=trap_edge detail=InvalidShift"
+= 1 "fn=checked_shl pass=trap finding=trap_edge detail=IntegerOverflow"
+= 1 "fn=checked_shr pass=trap finding=trap_edge detail=InvalidShift"
+- "fn=checked_shr pass=trap finding=trap_edge detail=IntegerOverflow"
+
+# reported diagnostics
++ "E_NO_LANG_TRAP_EDGE"

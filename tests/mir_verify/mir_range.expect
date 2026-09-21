@@ -1,0 +1,7 @@
+# MIR records no_overflow range facts for unchecked add contract
+mode: raw
+
++ "mir verify fn=accumulate pass=range finding=no_overflow_range target=sum op=add left=sum right=b"
+
+# one range fact, and only one: the contract covers a single add
+= 1 "pass=range finding=no_overflow_range"

@@ -1,0 +1,10 @@
+# MIR verifier reports switch literal pattern type mismatches
+mode: raw
+
++ "mir verify fn=reject_bool_switch_integer_pattern pass=core finding=switch_literal_type_mismatch"
++ "mir verify fn=reject_integer_switch_bool_pattern pass=core finding=switch_literal_type_mismatch"
++ "mir verify fn=reject_enum_switch_literal_pattern pass=core finding=switch_literal_type_mismatch"
+- "mir verify fn=accept_scalar_switch_literals pass=core finding=switch_literal_type_mismatch"
+
+# reported diagnostics
+>= 3 "E_NO_IMPLICIT_CONVERSION"

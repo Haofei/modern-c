@@ -1,0 +1,17 @@
+# MIR representation checks emit invalid-representation trap edges
+mode: raw
+
++ "mir verify fn=checked_ptr_param pass=trap finding=trap_edge detail=InvalidRepresentation source=representation_check"
++ "mir verify fn=checked_irq_param pass=trap finding=trap_edge detail=InvalidRepresentation source=representation_check"
+- "mir verify fn=checked_open_enum pass=trap finding=trap_edge detail=InvalidRepresentation"
++ "mir verify fn=reject_no_lang_ptr_param pass=trap finding=trap_edge detail=InvalidRepresentation source=representation_check no_lang_trap=true"
++ "mir verify fn=reject_no_lang_irq_param pass=trap finding=trap_edge detail=InvalidRepresentation source=representation_check no_lang_trap=true"
+
+# one InvalidRepresentation trap edge per checked parameter, and none
+# for the open enum, whose representation admits every bit pattern.
+= 1 "fn=checked_ptr_param pass=trap finding=trap_edge detail=InvalidRepresentation"
+= 1 "fn=checked_irq_param pass=trap finding=trap_edge detail=InvalidRepresentation"
+- "fn=checked_open_enum pass=trap finding=trap_edge detail=InvalidRepresentation"
+
+# reported diagnostics: both no_lang_trap functions carry one
+>= 2 "E_NO_LANG_TRAP_EDGE"

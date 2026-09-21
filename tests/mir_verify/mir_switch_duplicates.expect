@@ -1,0 +1,12 @@
+# MIR verifier reports duplicate switch cases
+mode: raw
+
++ "mir verify fn=reject_bool_duplicate pass=core finding=duplicate_switch_case"
++ "mir verify fn=reject_integer_duplicate pass=core finding=duplicate_switch_case"
++ "mir verify fn=reject_result_duplicate pass=core finding=duplicate_switch_case"
++ "mir verify fn=reject_case_after_wildcard pass=core finding=duplicate_switch_case"
++ "mir verify fn=reject_same_arm_wildcard_cover pass=core finding=duplicate_switch_case"
+- "mir verify fn=accept_distinct_switches pass=core finding=duplicate_switch_case"
+
+# reported diagnostics
+>= 5 "E_DUPLICATE_SWITCH_CASE"

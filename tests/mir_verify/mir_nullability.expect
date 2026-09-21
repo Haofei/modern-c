@@ -1,0 +1,13 @@
+# MIR verifier reports nullability conversion violations
+mode: raw
+
++ "mir verify fn=reject_null_local pass=nullability finding=null_to_nonnull"
++ "mir verify fn=reject_null_assignment pass=nullability finding=null_to_nonnull"
++ "mir verify fn=reject_nullable_return pass=nullability finding=nullable_to_nonnull"
++ "mir verify fn=reject_nullable_call_return pass=nullability finding=nullable_to_nonnull"
+- "mir verify fn=accept_nonnull_to_nullable pass=nullability"
+- "mir verify fn=accept_null_nullable pass=nullability"
+
+# reported diagnostics
++ "E_NULL_NON_NULL_POINTER"
++ "E_NO_IMPLICIT_POINTER_CONVERSION"

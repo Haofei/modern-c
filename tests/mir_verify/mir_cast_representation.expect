@@ -1,0 +1,12 @@
+# MIR target representation checks see through casts
+mode: raw
+
++ "mir verify fn=cast_pointer_return pass=representation finding=representation_check type=nonnull_pointer"
++ "mir verify fn=cast_pointer_local pass=representation finding=representation_use detail=initializer type=*mut"
++ "mir verify fn=cast_pointer_assignment pass=representation finding=representation_use detail=assignment type=*mut"
++ "mir verify fn=cast_pointer_call_arg pass=representation finding=representation_use detail=call_arg type=*mut"
++ "mir verify fn=cast_pointer_aggregate_field pass=representation finding=representation_use detail=aggregate_field type=*mut"
++ "mir verify fn=cast_pointer_aggregate_element pass=representation finding=representation_use detail=aggregate_element type=*mut"
+
+# a cast does not hide the obligation, and none of this is an error
+- "mir diagnostic "

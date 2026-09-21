@@ -1,0 +1,30 @@
+# MIR emits representation checks for nonnull pointer and closed enum call results
+mode: raw
+
++ "mir verify fn=use_ptr pass=representation finding=representation_check type=nonnull_pointer"
++ "mir verify fn=use_irq pass=representation finding=representation_check type=Irq"
++ "mir verify fn=use_ptr_param pass=representation finding=typed_load detail=p type=*mut"
++ "mir verify fn=use_irq_param pass=representation finding=typed_load detail=irq type=Irq"
++ "mir verify fn=use_packet_ptr pass=representation finding=typed_load detail=ptr type=*mut"
++ "mir verify fn=use_packet_irq pass=representation finding=typed_load detail=irq type=Irq"
++ "mir verify fn=use_copied_packet_ptr pass=representation finding=typed_load detail=ptr type=*mut"
++ "mir verify fn=use_copied_packet_irq pass=representation finding=typed_load detail=irq type=Irq"
++ "mir verify fn=use_copied_call_packet_ptr pass=representation finding=typed_load detail=ptr type=*mut"
++ "mir verify fn=use_copied_call_packet_irq pass=representation finding=typed_load detail=irq type=Irq"
++ "mir verify fn=use_packet_ptr_deref pass=representation finding=representation_use detail=deref_base type=*mut"
++ "mir verify fn=compare_packet_ptrs pass=representation finding=representation_use detail=binary_operand type=*mut"
++ "mir verify fn=compare_irq_values pass=representation finding=representation_use detail=binary_operand type=Irq"
++ "mir verify fn=compare_irq_literal pass=representation finding=representation_use detail=binary_operand type=Irq"
+- "mir verify fn=compare_irq_literal pass=representation finding=representation_use detail=binary_operand type=value"
++ "mir verify fn=use_array_ptr pass=representation finding=typed_load detail=index type=*mut"
++ "mir verify fn=use_array_irq pass=representation finding=typed_load detail=index type=Irq"
++ "mir verify fn=use_copied_array_ptr pass=representation finding=typed_load detail=index type=*mut"
++ "mir verify fn=use_copied_array_irq pass=representation finding=typed_load detail=index type=Irq"
++ "mir verify fn=use_call_array_ptr pass=representation finding=typed_load detail=index type=*mut"
++ "mir verify fn=use_call_array_irq pass=representation finding=typed_load detail=index type=Irq"
++ "mir verify fn=use_copied_call_array_ptr pass=representation finding=typed_load detail=index type=*mut"
++ "mir verify fn=use_copied_call_array_irq pass=representation finding=typed_load detail=index type=Irq"
+
+# every function here is accepted: recording a representation obligation
+# is not reporting an error, so the verifier must report nothing at all.
+- "mir diagnostic "

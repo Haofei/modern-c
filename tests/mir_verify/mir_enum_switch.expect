@@ -1,0 +1,15 @@
+# MIR verifier validates enum switch cases and closed enum exhaustiveness
+mode: raw
+
++ "mir verify fn=reject_closed_enum_nonexhaustive pass=core finding=closed_enum_switch_exhaustive"
++ "mir verify fn=reject_closed_enum_unknown_case pass=core finding=unknown_enum_case"
++ "mir verify fn=reject_open_enum_unknown_case pass=core finding=unknown_enum_case"
++ "mir verify fn=reject_enum_duplicate_case pass=core finding=duplicate_switch_case"
++ "mir verify fn=accept_closed_enum_exhaustive pass=representation finding=representation_use detail=switch_subject type=Irq"
+- "mir verify fn=accept_closed_enum_exhaustive pass=core"
+- "mir verify fn=accept_closed_enum_wildcard pass=core"
+
+# reported diagnostics
++ "E_CLOSED_ENUM_SWITCH_EXHAUSTIVE"
++ "E_UNKNOWN_ENUM_CASE"
++ "E_DUPLICATE_SWITCH_CASE"

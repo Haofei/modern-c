@@ -1,0 +1,18 @@
+# MIR verifier reports invalid operator operands
+mode: raw
+
++ "mir verify fn=reject_unsigned_negation pass=core finding=unsigned_negation"
++ "mir verify fn=reject_integer_not pass=core finding=bool_operator_operand"
++ "mir verify fn=reject_integer_logical_and pass=core finding=bool_operator_operand"
++ "mir verify fn=reject_signed_bitwise pass=core finding=bitwise_signed_operand"
++ "mir verify fn=reject_bool_bitwise pass=core finding=bitwise_bool_operand"
++ "mir verify fn=reject_pointer_bitwise pass=core finding=bitwise_pointer_operand"
++ "mir verify fn=reject_null_bitwise pass=core finding=operator_operand"
+
+# reported diagnostics
++ "E_UNSIGNED_NEGATION"
+>= 2 "E_BOOL_OPERATOR_OPERAND"
++ "E_BITWISE_SIGNED_OPERAND"
++ "E_BITWISE_BOOL_OPERAND"
++ "E_BITWISE_POINTER_OPERAND"
++ "E_OPERATOR_OPERAND"

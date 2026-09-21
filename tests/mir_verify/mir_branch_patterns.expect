@@ -1,0 +1,21 @@
+# MIR verifier reports invalid if-let and switch Result patterns
+mode: raw
+
++ "mir verify fn=reject_if_let_optional_required pass=result finding=if_let_optional_required"
++ "mir verify fn=reject_if_let_result_required pass=result finding=if_let_result_required"
++ "mir verify fn=reject_if_let_result_tag pass=result finding=if_let_result_tag"
++ "mir verify fn=reject_if_let_narrow_pattern pass=result finding=if_let_narrow_pattern"
++ "mir verify fn=reject_switch_result_tag pass=result finding=switch_result_tag"
++ "mir verify fn=reject_switch_result_required pass=result finding=switch_result_required"
++ "mir verify fn=reject_switch_multi_binding_arm pass=result finding=switch_multi_binding_arm"
+- "mir verify fn=accept_valid_result_patterns pass=result finding=if_let_"
+- "mir verify fn=accept_valid_result_patterns pass=result finding=switch_"
+
+# reported diagnostics
++ "E_IF_LET_OPTIONAL_REQUIRED"
++ "E_IF_LET_RESULT_REQUIRED"
++ "E_IF_LET_RESULT_TAG"
++ "E_IF_LET_NARROW_PATTERN"
++ "E_SWITCH_RESULT_TAG"
++ "E_SWITCH_RESULT_REQUIRED"
++ "E_SWITCH_MULTI_BINDING_ARM"

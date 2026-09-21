@@ -1,0 +1,11 @@
+# MIR verifier reports Result reassignment and invalid try operands
+mode: raw
+
++ "mir verify fn=reject_overwrite_unhandled_result pass=result finding=unhandled_result"
+- "mir verify fn=accept_assignment_handled_later pass=result finding=unhandled_result"
++ "mir verify fn=reject_void_direct_call_try pass=result finding=try_requires_result_or_nullable"
++ "mir verify fn=reject_integer_try pass=result finding=try_requires_result_or_nullable"
+
+# reported diagnostics
++ "E_UNHANDLED_RESULT"
++ "E_TRY_REQUIRES_RESULT_OR_NULLABLE"

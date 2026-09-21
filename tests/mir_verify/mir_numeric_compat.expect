@@ -1,0 +1,16 @@
+# MIR verifier reports binary numeric compatibility errors
+mode: raw
+
++ "mir verify fn=reject_signed_unsigned_arithmetic pass=core finding=signed_unsigned_mix"
++ "mir verify fn=reject_unsigned_signed_comparison pass=core finding=signed_unsigned_mix"
++ "mir verify fn=reject_integer_width_arithmetic pass=core finding=integer_promotion"
++ "mir verify fn=reject_signed_width_comparison pass=core finding=integer_promotion"
++ "mir verify fn=reject_f32_f64_mix pass=core finding=float_binary_conversion"
++ "mir verify fn=reject_float_int_mix pass=core finding=float_binary_conversion"
++ "mir verify fn=reject_float_remainder pass=core finding=operator_operand"
+
+# reported diagnostics
+>= 2 "E_SIGNED_UNSIGNED_MIX"
+>= 2 "E_NO_IMPLICIT_INTEGER_PROMOTION"
+>= 2 "E_NO_IMPLICIT_CONVERSION"
++ "E_OPERATOR_OPERAND"

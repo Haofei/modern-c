@@ -1,0 +1,14 @@
+# MIR verifier reports integer literal range conversions
+mode: raw
+
+- "mir verify fn=accept_literals pass=conversion"
++ "mir verify fn=reject_return_literal pass=conversion finding=integer_literal_out_of_range source_type=comptime_int"
++ "mir verify fn=reject_local_literal pass=conversion finding=integer_literal_out_of_range source_type=comptime_int"
++ "mir verify fn=reject_negative_unsigned pass=conversion finding=integer_literal_out_of_range source_type=comptime_int"
++ "mir verify fn=reject_i8_high pass=conversion finding=integer_literal_out_of_range source_type=comptime_int"
++ "mir verify fn=reject_i8_low pass=conversion finding=integer_literal_out_of_range source_type=comptime_int"
++ "mir verify fn=reject_assignment_literal pass=conversion finding=integer_literal_out_of_range source_type=comptime_int"
++ "mir verify fn=reject_call_arg_literal pass=conversion finding=integer_literal_out_of_range source_type=comptime_int"
+
+# reported diagnostics
++ "E_INTEGER_LITERAL_OUT_OF_RANGE"

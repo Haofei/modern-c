@@ -1,0 +1,12 @@
+# MIR verifier validates tagged union switch cases
+mode: raw
+
++ "mir verify fn=reject_unknown_union_case pass=core finding=unknown_union_case"
++ "mir verify fn=reject_payloadless_union_case_binding pass=core finding=union_case_has_no_payload"
++ "mir verify fn=reject_duplicate_union_case pass=core finding=duplicate_switch_case"
+- "mir verify fn=accept_union_patterns pass=core"
+
+# reported diagnostics
++ "E_UNKNOWN_UNION_CASE"
++ "E_UNION_CASE_HAS_NO_PAYLOAD"
++ "E_DUPLICATE_SWITCH_CASE"
