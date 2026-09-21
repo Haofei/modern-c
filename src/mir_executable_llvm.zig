@@ -1422,6 +1422,12 @@ const Renderer = struct {
         try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ is_ok, operand.ty, operand.spelling });
         try self.output.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ is_ok, continuation, failure, failure });
         const mapped_error = switch (operation.mapper) {
+            .identity => identity: {
+                const source_error = try self.temp();
+                const source_error_ty = try self.typeText(source.err_ty);
+                try self.output.print(self.allocator, "  {s} = extractvalue {s} {s}, 2\n", .{ source_error, operand.ty, operand.spelling });
+                break :identity Value{ .ty = source_error_ty, .spelling = source_error };
+            },
             .conversion => |conversion| converted: {
                 const source_error = try self.temp();
                 const source_error_ty = try self.typeText(source.err_ty);
@@ -4703,9 +4709,16 @@ fn tryMapErrorSupported(
     if (operand.result_ty != .result or ownedExpressionTrapCount(body, expression.id) != 0) return false;
     const source = resultType(body, operand.type_id) orelse return false;
     const target = resultType(body, body.return_type_id) orelse return false;
-    if (!sameValueType(source.ok_ty, target.ok_ty) or
-        !sameValueType(expression.result_ty, source.ok_ty) or !expression.type_id.eql(source.ok_type_id)) return false;
+    // The ok payloads are unrelated: this operation returns only on the error
+    // path, where the enclosing `Result`'s ok slot is never filled.
+    if (!sameValueType(expression.result_ty, source.ok_ty) or !expression.type_id.eql(source.ok_type_id)) return false;
     return switch (operation.mapper) {
+        // The two error types are already the same, so the operand's
+        // error is the propagated one. Distinct from `try_propagate`:
+        // that returns the operand and therefore needs the whole `Result`
+        // type to match, while this builds the enclosing function's
+        // `Result` and so admits a different ok payload.
+        .identity => sameValueType(source.err_ty, target.err_ty) and source.err_type_id.eql(target.err_type_id),
         .conversion => |conversion| conversion_valid: {
             const callee = symbolIdentity(body, conversion.callee) orelse break :conversion_valid false;
             const signature = conversion.signature;

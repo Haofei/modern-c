@@ -1891,9 +1891,16 @@ fn tryMapErrorSupported(
     if (operand.result_ty != .result or ownedTrapEdgeCount(body, expression.id) != 0) return false;
     const source = resultType(body, operand.type_id) orelse return false;
     const target = resultType(body, body.return_type_id) orelse return false;
-    if (!sameValueType(source.ok_ty, target.ok_ty) or
-        !sameValueType(expression.result_ty, source.ok_ty) or !expression.type_id.eql(source.ok_type_id)) return false;
+    // The ok payloads are unrelated: this operation returns only on the error
+    // path, where the enclosing `Result`'s ok slot is never filled.
+    if (!sameValueType(expression.result_ty, source.ok_ty) or !expression.type_id.eql(source.ok_type_id)) return false;
     return switch (operation.mapper) {
+        // The two error types are already the same, so the operand's
+        // error is the propagated one. Distinct from `try_propagate`:
+        // that returns the operand and therefore needs the whole `Result`
+        // type to match, while this builds the enclosing function's
+        // `Result` and so admits a different ok payload.
+        .identity => sameValueType(source.err_ty, target.err_ty) and source.err_type_id.eql(target.err_type_id),
         .conversion => |conversion| conversion_valid: {
             const callee = symbolById(body, conversion.callee) orelse break :conversion_valid false;
             const signature = conversion.signature;
@@ -4732,6 +4739,10 @@ fn prepareExpressionSet(
             try appendCType(allocator, out, body, target.ty);
             try out.appendSlice(allocator, "){ .is_ok = false, .payload.err = ");
             switch (operation.mapper) {
+                .identity => {
+                    try emitExpression(allocator, out, body, operation.operand, 0);
+                    try out.appendSlice(allocator, ".payload.err");
+                },
                 .conversion => |conversion| {
                     try appendSymbol(allocator, out, body, conversion.callee);
                     try out.append(allocator, '(');
@@ -4880,7 +4891,7 @@ fn expressionDependsOn(body: *const mir.ExecutableBody, root: mir.ExprId, candid
         .tagged_union_tag => |operand| expressionDependsOn(body, operand, candidate, depth + 1),
         .tagged_union_payload => |operation| expressionDependsOn(body, operation.operand, candidate, depth + 1),
         .try_map_error => |mapped| expressionDependsOn(body, mapped.operand, candidate, depth + 1) or switch (mapped.mapper) {
-            .conversion => false,
+            .identity, .conversion => false,
             .literal => |literal| expressionDependsOn(body, literal, candidate, depth + 1),
         },
         .result => |result| expressionDependsOn(body, result.payload, candidate, depth + 1),

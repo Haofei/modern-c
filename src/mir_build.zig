@@ -6237,9 +6237,18 @@ pub const FunctionBuilder = struct {
         }
         const source = source_shape orelse return false;
         const target = target_shape orelse return false;
-        if (!sameValueType(source.ok_ty, target.ok_ty) or
-            !sameValueType(expression.result_ty, source.ok_ty) or !expression.type_id.eql(source.ok_type_id)) return false;
+        // The ok payloads are deliberately unrelated. This operation only
+        // ever returns on the error path, where the enclosing `Result`'s ok
+        // slot is never filled; the value it yields on the ok path is the
+        // operand's own payload, which the check below pins.
+        if (!sameValueType(expression.result_ty, source.ok_ty) or !expression.type_id.eql(source.ok_type_id)) return false;
         return switch (operation.mapper) {
+            // The two error types are already the same, so the operand's
+            // error is the propagated one. Distinct from `try_propagate`:
+            // that returns the operand and therefore needs the whole `Result`
+            // type to match, while this builds the enclosing function's
+            // `Result` and so admits a different ok payload.
+            .identity => sameValueType(source.err_ty, target.err_ty) and source.err_type_id.eql(target.err_type_id),
             .conversion => |conversion| conversion_valid: {
                 if (!conversion.callee.isValid() or conversion.callee.index() >= self.executable_symbols.items.len) break :conversion_valid false;
                 const symbol = self.executable_symbols.items[conversion.callee.index()];
@@ -9481,12 +9490,19 @@ pub const FunctionBuilder = struct {
                             .operand = operand_id,
                             .error_cleanup_actions = try self.reverseExecutableCleanupSuffix(0),
                         } };
-                    if (!std.mem.eql(u8, operand_ty.result.ok, self.return_ty.result.ok))
-                        break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
                     const source_error_ty = valueTypeFromTypeNameAlias(operand_ty.result.err, self.enums, self.structs, self.packed_bits);
                     const target_error_ty = valueTypeFromTypeNameAlias(self.return_ty.result.err, self.enums, self.structs, self.packed_bits);
                     if (source_error_ty == .unknown or target_error_ty == .unknown)
                         break :unwrap self.unsupportedExecutableExpression(.unsupported_try);
+                    // Same error type, different ok payload: the error needs no
+                    // mapping, but the returned `Result` is still the enclosing
+                    // function's and must be built rather than passed through.
+                    if (node.mapped == null and sameValueType(source_error_ty, target_error_ty))
+                        break :unwrap .{ .try_map_error = .{
+                            .operand = operand_id,
+                            .mapper = .identity,
+                            .error_cleanup_actions = try self.reverseExecutableCleanupSuffix(0),
+                        } };
                     const mapper: mir_model.ExecutableTryErrorMapper = if (node.mapped) |mapped| mapped_mapper: {
                         const target_error_type_expr = resultPayloadTypeExprAlias(return_type_expr, "err", self.aliases) orelse
                             break :unwrap self.unsupportedExecutableExpression(.unsupported_try);

@@ -2366,9 +2366,16 @@ fn tryMapErrorPayloadValid(
     if (operand.result_ty != .result) return false;
     const source = resultType(body, operand.type_id) orelse return false;
     const target = resultType(body, body.return_type_id) orelse return false;
-    if (!sameValueType(source.ok_ty, target.ok_ty) or
-        !sameValueType(value.result_ty, source.ok_ty) or !value.type_id.eql(source.ok_type_id)) return false;
+    // The ok payloads are unrelated: this operation returns only on the error
+    // path, where the enclosing `Result`'s ok slot is never filled.
+    if (!sameValueType(value.result_ty, source.ok_ty) or !value.type_id.eql(source.ok_type_id)) return false;
     return switch (mapper) {
+        // The two error types are already the same, so the operand's
+        // error is the propagated one. Distinct from `try_propagate`:
+        // that returns the operand and therefore needs the whole `Result`
+        // type to match, while this builds the enclosing function's
+        // `Result` and so admits a different ok payload.
+        .identity => sameValueType(source.err_ty, target.err_ty) and source.err_type_id.eql(target.err_type_id),
         .conversion => |conversion| conversion_valid: {
             const callee = symbol(body, conversion.callee) orelse break :conversion_valid false;
             const signature = conversion.signature;

@@ -1588,7 +1588,17 @@ pub const ExecutableVariantKind = enum {
 /// are deliberately excluded: a direct checked converter remains lazy on the
 /// error edge, while a canonical literal is pure and may be materialized by a
 /// backend without changing observable evaluation order.
+/// How a propagated error reaches the enclosing function's `Result`.
+///
+/// `identity` is the case where the two error types are already the same, so
+/// the operand's error moves into the return value's error slot unchanged. It
+/// is not the same thing as `try_propagate`: propagation returns the operand
+/// itself and therefore needs the whole `Result` type to match, while this
+/// builds the enclosing function's `Result` and so admits a different ok
+/// payload -- which is what `let f = open()?;` inside a `-> Result<usize, E>`
+/// function actually asks for.
 pub const ExecutableTryErrorMapper = union(enum) {
+    identity,
     conversion: struct {
         callee: SymbolId,
         signature: ExecutableCallSignature,

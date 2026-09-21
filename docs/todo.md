@@ -145,17 +145,28 @@ pointers.
 
 ### Note: the sweep gaps that are left
 
-Four `E_BACKEND_UNSUPPORTED` entries remain in
-`backend-expected-failures.json`, in three families. Largest first:
+Three `E_BACKEND_UNSUPPORTED` entries remain in
+`backend-expected-failures.json`, in two families. Largest first:
 
 | Family | Fixtures | What it is |
 |---|---|---|
 | pointers through arrays, slices and aliases | `data_race_semantics.mc` | **Blocked, and it is not one gap.** Deleting each failing function and re-emitting enumerates 60 of them in five families. The large one is `index` / `range_slice` over an array or slice whose elements are pointers: `executableIndexComplete` and `executableRangeSliceComplete` match the element type by `ValueType.name()`, and `pointerShapeName` renders every single pointer as `*mut`, dropping the pointee -- so the element check cannot distinguish `[]*u32` from `[]*Foo`. That is the stringly-typed `ValueType` P0 above, not a local fix; it needs the element type compared by `TypeId`. The other four: a `*T as [*]T` cast kind that neither `ExecutableCastKind.classify` nor either renderer has; an indirect call through a pointer alias copied from a parameter, declined by codegen admission as `expression `local``; a trapping store of a pointer into an aggregate field; and one `incoherent_statement` in an array-element assignment. Closed on the way past: `(&E).*`, which was refused because the builder computes no type for an `address_of` and so had none for the deref either. |
-| `unsupported_try` | `hosted_io.mc` | |
 | `incoherent_place` | `local_address_escape.mc` | |
 | `incoherent_executable_shape` | `type_arg_and_trivial_drop_reject.mc` | |
 
 The five `E_EXPERIMENTAL_DYN_CODEGEN` entries are policy and stay.
+
+Closed: **`unsupported_try`** (`hosted_io.mc`). `let f = io_open(...)?;` inside
+a `-> Result<usize, IoError>` function propagates a `Result<Fd, IoError>`. The
+two `Result` types differ, so `try_propagate` -- which returns the operand
+itself -- does not apply; and `try_map_error`, which builds the enclosing
+function's `Result`, required the two ok payloads to be equal. That requirement
+was spurious: the operation returns only on the error path, where the enclosing
+`Result`'s ok slot is never filled, and the value it yields on the ok path is
+the operand's own payload. Dropping it leaves the same-error case with no
+mapper, so `ExecutableTryErrorMapper` gained an `identity` arm: the error moves
+into the return value's error slot unchanged, and both renderers read it
+straight out of the operand.
 
 Closed: **`unsupported_call`** (`comptime_params.mc`). It was not a call
 problem either. `sizeof([{ return N; }]u8)` folds to nothing because
