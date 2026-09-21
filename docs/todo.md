@@ -145,12 +145,11 @@ pointers.
 
 ### Note: the sweep gaps that are left
 
-Seven `E_BACKEND_UNSUPPORTED` entries remain in
-`backend-expected-failures.json`, in five families. Largest first:
+Five `E_BACKEND_UNSUPPORTED` entries remain in
+`backend-expected-failures.json`, in four families. Largest first:
 
 | Family | Fixtures | What it is |
 |---|---|---|
-| `incoherent_cleanup_action` | `try_propagation.mc`, `move_borrow_escape.mc` | Not a cleanup-action problem despite the name: both reach it through `executableTrapProjectionComplete`, where a legacy trap edge has no executable counterpart. For `accept_result_pointer_try` it is the `Result<*mut u8, E>` unwrap, whose pointer payload adds a representation edge the try-propagation projection does not enumerate. |
 | `incoherent_expression` (slices of pointers) | `data_race_semantics.mc` | `index` / `range_slice` over a slice whose element type is a pointer. |
 | `unsupported_call` | `comptime_params.mc` | |
 | `unsupported_try` | `hosted_io.mc` | |
@@ -158,6 +157,28 @@ Seven `E_BACKEND_UNSUPPORTED` entries remain in
 | `incoherent_executable_shape` | `type_arg_and_trivial_drop_reject.mc` | |
 
 The five `E_EXPERIMENTAL_DYN_CODEGEN` entries are policy and stay.
+
+Closed: **`incoherent_cleanup_action`** (`try_propagation.mc`,
+`move_borrow_escape.mc`). The reason was misreported: a refused trap projection
+now says `incoherent_trap_projection`, which is its own thing -- not a
+malformed node, but the two bodies disagreeing about where control leaves the
+function. Underneath, both fixtures were one missing rule each in the same
+place, the map from a value-producing expression to the representation
+obligation its result carries.
+
+`result?` over a `Result<*mut u8, E>` pulls a pointer out of the union with its
+representation still unproven, exactly as a load of that type would, so the
+source-shaped pass records a trapping check for it. `try` over a *nullable*
+pointer is the deliberate exception -- the niche test is the check -- so
+`executableTryUnwrapsResultPayload` distinguishes the two. `arr[i]` over an
+array or slice of pointers is the same story: the bounds proof the index
+carries says nothing about the value it produced, so `index` joins `load` and
+`member` in that map. Both then needed their generated typedef names: a
+`Result<*mut T, E>` and an array of pointers name typedefs the declaration
+collector frames from `cSignatureSuffix`, and the body's own type-suffix
+renderer had no pointer case at all, so it would have referenced a typedef
+nothing declared. It has one now, over the pointee classes a bare spelling can
+recover -- a primitive scalar, and a struct the body's aggregate table carries.
 
 Closed: **`builtin_call` result not accepted** (`cast_class_strip.mc`,
 `serial_counter_ops.mc`). Two independent gaps hid behind one reason.

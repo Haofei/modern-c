@@ -5889,7 +5889,7 @@ pub const FunctionBuilder = struct {
         // The typed block/span identity must select exactly one operation;
         // zero or multiple candidates remain fail-closed.
         try self.resolveExecutableRepresentationTrapEdges(trap_edges, call_target_facts, legacy_blocks);
-        if (!try self.executableTrapProjectionComplete(trap_edges, call_target_facts, legacy_blocks)) self.markExecutableIncomplete(&complete, .incoherent_cleanup_action);
+        if (!try self.executableTrapProjectionComplete(trap_edges, call_target_facts, legacy_blocks)) self.markExecutableIncomplete(&complete, .incoherent_trap_projection);
         for (self.blocks.items) |block| {
             const block_index = block.id.index();
             const operation: @FieldType(ExecutableTerminator, "operation") = if (self.executable_for_each_terminators.get(block_index)) |for_each|
@@ -9561,11 +9561,12 @@ pub const FunctionBuilder = struct {
                     .ident => |ident| if (!self.proven_nonnull_bindings.contains(ident.text)) .nonnull_pointer else null,
                     else => null,
                 },
-                .load, .member => .nonnull_pointer,
+                .load, .member, .index => .nonnull_pointer,
                 .direct_call, .indirect_call => switch (expr.kind) {
                     .call => |call| if (callResultRepresentationCheckTraps(self.calleeName(call.callee.*))) .nonnull_pointer else null,
                     else => null,
                 },
+                .try_unwrap, .try_propagate, .try_map_error => if (self.executableTryUnwrapsResultPayload(operation)) .nonnull_pointer else null,
                 else => null,
             },
             .pointer => |shape| switch (shape.kind) {
@@ -9574,7 +9575,12 @@ pub const FunctionBuilder = struct {
                         .ident => |ident| if (!self.proven_nonnull_bindings.contains(ident.text)) .nonnull_pointer else null,
                         else => null,
                     },
-                    .load, .member => .nonnull_pointer,
+                    // Reading one element out of an array or slice whose
+                    // elements are pointers yields a pointer with the same
+                    // unproven representation a load of that type has; the
+                    // bounds proof the index carries says nothing about the
+                    // value it produced.
+                    .load, .member, .index => .nonnull_pointer,
                     // A safe `*mut T` -> `*const T` narrowing preserves the
                     // pointer bits but still owns the target non-null
                     // representation obligation recorded by semantic MIR.
@@ -9592,6 +9598,7 @@ pub const FunctionBuilder = struct {
                         .call => |call| if (callResultRepresentationCheckTraps(self.calleeName(call.callee.*))) .nonnull_pointer else null,
                         else => null,
                     },
+                    .try_unwrap, .try_propagate, .try_map_error => if (self.executableTryUnwrapsResultPayload(operation)) .nonnull_pointer else null,
                     else => null,
                 },
                 .slice => switch (operation) {
@@ -9600,7 +9607,7 @@ pub const FunctionBuilder = struct {
                     // InvalidRepresentation edge. Bounds remain owned by
                     // index/range operations and are deliberately excluded.
                     .local => |local_id| if (self.executableLocalInitializedByTaggedUnionPayload(local_id)) null else .valid_slice,
-                    .load, .member, .cast => .valid_slice,
+                    .load, .member, .cast, .index => .valid_slice,
                     .direct_call, .indirect_call => switch (expr.kind) {
                         .call => |call| if (callResultRepresentationCheckTraps(self.calleeName(call.callee.*))) .valid_slice else null,
                         else => null,
@@ -9614,12 +9621,14 @@ pub const FunctionBuilder = struct {
                             null,
                         else => null,
                     },
+                    .try_unwrap, .try_propagate, .try_map_error => if (self.executableTryUnwrapsResultPayload(operation)) .valid_slice else null,
                     else => null,
                 },
                 .raw_many => null,
             },
             .closed_enum => switch (operation) {
                 .local, .symbol, .load, .member, .index, .direct_call, .indirect_call => .valid_closed_enum,
+                .try_unwrap, .try_propagate, .try_map_error => if (self.executableTryUnwrapsResultPayload(operation)) .valid_closed_enum else null,
                 else => null,
             },
             else => null,
@@ -9775,6 +9784,26 @@ pub const FunctionBuilder = struct {
             if (self.unions.contains(name)) return .{ .tagged_union = name };
         }
         return valueTypeFromTypeAlias(type_expr, self.enums, self.structs, self.packed_bits, self.aliases);
+    }
+
+    /// Whether a `try` expression's payload still owes a representation
+    /// proof.
+    ///
+    /// `try` over a nullable pointer tests the niche itself, so that one test
+    /// *is* the representation check: recording a second one would claim two
+    /// exceptional outcomes for a single branch, and the source-shaped pass
+    /// deliberately records a non-trapping check there. Every other `try`
+    /// operand is a `Result`, whose payload comes out of the union unproven
+    /// and carries the same obligation a load of that type would.
+    fn executableTryUnwrapsResultPayload(self: *const FunctionBuilder, operation: ExecutableExpression.Operation) bool {
+        const operand_id = switch (operation) {
+            .try_unwrap => |id| id,
+            .try_propagate => |value| value.operand,
+            .try_map_error => |value| value.operand,
+            else => return false,
+        };
+        if (!operand_id.isValid() or operand_id.index() >= self.executable_expressions.items.len) return false;
+        return self.executable_expressions.items[operand_id.index()].result_ty == .result;
     }
 
     fn executableLocalInitializedByTaggedUnionPayload(self: *const FunctionBuilder, local_id: LocalId) bool {

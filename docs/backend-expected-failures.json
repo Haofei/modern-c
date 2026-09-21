@@ -29,12 +29,6 @@
       "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_place` in `accept_pass_local_address_down` (declined by mir-build)."
     },
     {
-      "fixture": "move_borrow_escape.mc",
-      "stage": "EMIT",
-      "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_cleanup_action` in `accept_dynamic_multi_array_elem_assign_before_move` (declined by mir-build)."
-    },
-    {
       "fixture": "traits_dyn_accept.mc",
       "stage": "EMIT",
       "reason": "E_EXPERIMENTAL_DYN_CODEGEN",
@@ -63,12 +57,6 @@
       "stage": "EMIT",
       "reason": "E_EXPERIMENTAL_DYN_CODEGEN",
       "note": "The kept chunk stores a nullable dynamic trait object in a struct field. The qualified C and LLVM backends refuse dynamic trait objects by design; the struct-field check in the shared codegen admission now names that reason instead of the emitter declining the chunk later without a marker."
-    },
-    {
-      "fixture": "try_propagation.mc",
-      "stage": "EMIT",
-      "reason": "E_BACKEND_UNSUPPORTED",
-      "note": "The C emitter declines the fixture's kept chunk and now names why: C backend does not yet support a body left incomplete by `incoherent_cleanup_action` in `accept_result_pointer_try` (declined by mir-build)."
     },
     {
       "fixture": "type_arg_and_trivial_drop_reject.mc",

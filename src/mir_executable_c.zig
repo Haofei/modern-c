@@ -2150,7 +2150,7 @@ fn emitClosureBind(
 ) (RenderError || std.mem.Allocator.Error)!void {
     if (closureTypeNameSupported(bind.signature)) {
         try out.appendSlice(allocator, "((");
-        try appendClosureTypeName(allocator, out, bind.signature);
+        try appendClosureTypeName(allocator, out, body, bind.signature);
         try out.appendSlice(allocator, "){ .code = (");
     } else {
         try out.appendSlice(allocator, "((struct { ");
@@ -2188,16 +2188,17 @@ fn cTypeSuffixSupported(ty: mir.ValueType) bool {
 fn appendClosureTypeName(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
     signature: mir.ExecutableCallSignature,
 ) (RenderError || std.mem.Allocator.Error)!void {
     try out.appendSlice(allocator, "mc_closure");
     var suffix: std.ArrayList(u8) = .empty;
     defer suffix.deinit(allocator);
-    try appendCTypeSuffix(allocator, &suffix, signature.return_ty);
+    try appendCTypeSuffix(allocator, &suffix, body, signature.return_ty);
     try out.print(allocator, "_{d}_{s}", .{ suffix.items.len, suffix.items });
     for (signature.parameter_types[0..signature.parameter_count]) |ty| {
         suffix.clearRetainingCapacity();
-        try appendCTypeSuffix(allocator, &suffix, ty);
+        try appendCTypeSuffix(allocator, &suffix, body, ty);
         try out.print(allocator, "_{d}_{s}", .{ suffix.items.len, suffix.items });
     }
 }
@@ -3270,7 +3271,7 @@ fn emitBuiltinCall(
             const parameter = mir.executableDmaBufferParameter(body, call.dma_buffer) orelse return error.InvalidExpression;
             try out.appendSlice(allocator, "((");
             try out.appendSlice(allocator, "mc_slice_mut_");
-            try appendCTypeSuffix(allocator, out, parameter.dma_payload_ty);
+            try appendCTypeSuffix(allocator, out, body, parameter.dma_payload_ty);
             try out.appendSlice(allocator, "){ .ptr = ");
             try appendLocal(allocator, out, body, call.dma_buffer);
             try out.appendSlice(allocator, ", .len = 1 })");
@@ -5580,7 +5581,7 @@ fn appendCType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), body: *con
             const shape = aggregateTypeForValueType(body, ty) orelse return error.UnsupportedType;
             if (shape.construction != .declared_struct or shape.ty != .nullable_value or shape.field_count != 2) return error.UnsupportedType;
             try out.appendSlice(allocator, "mc_opt_");
-            try appendCTypeSuffix(allocator, out, shape.field_types[1]);
+            try appendCTypeSuffix(allocator, out, body, shape.field_types[1]);
         },
         .result => |identity| {
             const shape = resultTypeForValueType(body, ty) orelse return error.UnsupportedType;
@@ -5616,7 +5617,7 @@ fn appendResultCTypeSuffix(
         // identifiers, but their declarations use the canonical nominal
         // struct encoding. Prefer the verified storage identity so expression
         // temporaries name the same typedef as the function signature.
-        .struct_ => return appendCTypeSuffix(allocator, out, storage_ty),
+        .struct_ => return appendCTypeSuffix(allocator, out, body, storage_ty),
         .closed_enum, .open_enum => if (enumTypeForValueType(body, storage_ty)) |enum_ty| {
             if (!enum_ty.explicit_repr)
                 return out.print(allocator, "mc_type_name_{d}_{s}", .{ identity.len, identity });
@@ -5625,7 +5626,7 @@ fn appendResultCTypeSuffix(
     }
     if (isSafeIdentifier(identity)) return out.appendSlice(allocator, identity);
     if (try appendUnaryGenericCTypeSuffix(allocator, out, identity)) return;
-    return appendCTypeSuffix(allocator, out, storage_ty);
+    return appendCTypeSuffix(allocator, out, body, storage_ty);
 }
 
 fn appendUnaryGenericCTypeSuffix(
@@ -5644,11 +5645,42 @@ fn appendUnaryGenericCTypeSuffix(
     return true;
 }
 
-fn appendCTypeSuffix(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: mir.ValueType) (RenderError || std.mem.Allocator.Error)!void {
+fn appendCTypeSuffix(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    body: *const mir.ExecutableBody,
+    ty: mir.ValueType,
+) (RenderError || std.mem.Allocator.Error)!void {
     switch (ty) {
         .bool => try out.appendSlice(allocator, "bool"),
         .integer, .float => |name| try out.appendSlice(allocator, name),
         .address => try out.appendSlice(allocator, ty.name()),
+        // The framed pointer encoding the declaration collector registers its
+        // typedefs under (`lower_c_emitter.cSignatureSuffix`). A
+        // `Result<*mut T, E>` names its typedef from this suffix, so the two
+        // must agree character for character or the body would reference a
+        // typedef nothing declared. `PointerShape.child` is a spelling rather
+        // than a type, so only a primitive pointee -- the one class whose
+        // suffix is the spelling itself on both sides -- is admitted here.
+        .pointer => |shape| {
+            var child: std.ArrayList(u8) = .empty;
+            defer child.deinit(allocator);
+            try appendCTypeSuffix(allocator, &child, body, pointeeValueType(body, shape.child) orelse return error.UnsupportedType);
+            try out.print(allocator, "{s}{s}_{d}_{s}", .{
+                switch (shape.kind) {
+                    .single => "mc_type_ptr",
+                    .raw_many => "mc_type_manyptr",
+                    .slice => "mc_type_slice",
+                },
+                switch (shape.mutability) {
+                    .none => "_n",
+                    .mut => "_m",
+                    .@"const" => "_c",
+                },
+                child.items.len,
+                child.items,
+            });
+        },
         .struct_ => |name| try out.print(allocator, "mc_type_struct_{d}_{s}", .{ name.len, name }),
         .tagged_union => |name| try out.print(allocator, "mc_type_union_{d}_{s}", .{ name.len, name }),
         // Enum declarations are emitted as nominal C typedefs, so Result
@@ -5684,7 +5716,7 @@ fn appendArrayElementTypeSuffix(
         .closed_enum, .open_enum => |name| return out.print(allocator, "mc_type_name_{d}_{s}", .{ name.len, name }),
         else => {},
     }
-    if (ty != .array) return appendCTypeSuffix(allocator, out, ty);
+    if (ty != .array) return appendCTypeSuffix(allocator, out, body, ty);
     const shape = aggregateTypeForValueType(body, ty) orelse return error.UnsupportedType;
     if (shape.array_length == null or shape.array_length.? == 0 or shape.field_count == 0) return error.UnsupportedType;
     var child: std.ArrayList(u8) = .empty;
@@ -5751,6 +5783,21 @@ fn symbolById(body: *const mir.ExecutableBody, id: mir.SymbolId) ?*const mir.Sym
     if (!id.isValid()) return null;
     for (body.symbols) |*symbol| if (symbol.id.eql(id)) return symbol;
     return null;
+}
+
+/// `PointerShape.child` is a spelling, not a type, so recovering the pointee's
+/// own type is what lets the suffix recurse. Only the two classes the
+/// declaration collector spells from a bare name are recoverable: a primitive
+/// scalar, and a struct this body's aggregate table already carries. An enum
+/// or an alias is left out -- `cSignatureSuffix` frames those from the
+/// signature table's resolution, which a spelling alone cannot reproduce.
+fn pointeeValueType(body: *const mir.ExecutableBody, name: []const u8) ?mir.ValueType {
+    if (std.mem.eql(u8, name, "bool")) return .bool;
+    if (std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64")) return .{ .float = name };
+    const integer: mir.ValueType = .{ .integer = name };
+    if (primitiveType(name) != null and mir.ExecutableCastKind.integerInfo(integer) != null) return integer;
+    const aggregate: mir.ValueType = .{ .struct_ = name };
+    return if (aggregateTypeForValueType(body, aggregate) != null) aggregate else null;
 }
 
 fn appendIdent(allocator: std.mem.Allocator, out: *std.ArrayList(u8), spelling: []const u8) std.mem.Allocator.Error!void {

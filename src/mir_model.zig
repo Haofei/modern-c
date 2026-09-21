@@ -2380,6 +2380,12 @@ pub const ExecutableIncompleteReason = enum {
     incoherent_cleanup_action,
     incoherent_terminator,
     incoherent_executable_shape,
+    /// A trap edge the source-shaped pass recorded has no executable
+    /// counterpart, or an executable edge has no legacy one. This is its own
+    /// reason because it says something quite different from the rest: not
+    /// that a node is malformed, but that the two bodies disagree about where
+    /// control leaves the function.
+    incoherent_trap_projection,
     /// Ownership drop glue is still outside the canonical body boundary, so a
     /// function that needs it is refused here rather than half-rendered.
     unsupported_ownership_cleanup,
@@ -2397,6 +2403,7 @@ pub const ExecutableIncompleteReason = enum {
             .incoherent_cleanup_action,
             .incoherent_terminator,
             .incoherent_executable_shape,
+            .incoherent_trap_projection,
             => true,
             else => false,
         };
