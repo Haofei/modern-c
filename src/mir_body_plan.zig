@@ -251,7 +251,12 @@ pub fn verify(function: *const mir.Function) !void {
     try verifyCleanup(function);
 }
 
+/// A resolved access joins the typed node that realizes it, by the `AccessId`
+/// the fact and the node's `ExecutableAccessObligation` share. See
+/// `mir_verify.verifyFunctionAccessFacts` for the rule; this is the
+/// body-plan admission that states it as an error rather than a diagnostic.
 fn verifyAccessFacts(function: *const mir.Function) !void {
+    const typed = typedAccessObligationsRepresented(function);
     for (function.access_facts, 0..) |fact, index| {
         const primary_span_id = accessFactSpanId(fact);
         _ = spanIdentity(function, primary_span_id) orelse return error.InvalidAccessFact;
@@ -259,14 +264,23 @@ fn verifyAccessFacts(function: *const mir.Function) !void {
             .index => |access| {
                 try verifyRequiredAccessSpan(function, access.base_span_id);
                 try verifyRequiredAccessSpan(function, access.index_span_id);
-                if (access.index_ty != .integer or indexInstructionForFact(function, fact) == null) return error.InvalidAccessFact;
+                if (access.index_ty != .integer) return error.InvalidAccessFact;
+                if (typed) {
+                    if (!accessSiteAgreesWithFact(function, fact)) return error.InvalidAccessFact;
+                } else if (indexInstructionForFact(function, fact) == null) {
+                    return error.InvalidAccessFact;
+                }
             },
             .range_slice => |access| {
                 try verifyRequiredAccessSpan(function, access.base_span_id);
                 try verifyRequiredAccessSpan(function, access.start_span_id);
                 try verifyRequiredAccessSpan(function, access.end_span_id);
-                if (!accessResultIsSlice(access.result_ty) or access.start_ty != .integer or access.end_ty != .integer or
-                    indexInstructionForFact(function, fact) == null) return error.InvalidAccessFact;
+                if (!accessResultIsSlice(access.result_ty) or access.start_ty != .integer or access.end_ty != .integer) return error.InvalidAccessFact;
+                if (typed) {
+                    if (!accessSiteAgreesWithFact(function, fact)) return error.InvalidAccessFact;
+                } else if (indexInstructionForFact(function, fact) == null) {
+                    return error.InvalidAccessFact;
+                }
             },
             .address_of => |access| {
                 try verifyRequiredAccessSpan(function, access.operand_span_id);
@@ -290,6 +304,25 @@ fn verifyAccessFacts(function: *const mir.Function) !void {
             if (prior.accessId().eql(fact.accessId())) return error.DuplicateAccessFact;
         }
     }
+    if (typed) {
+        // Every typed element access and range slice owns an obligation
+        // named by exactly one fact. The typed body says which shape a node
+        // is, so a comptime projection is a `builtin_call` and not an index
+        // node at all -- the `ConstGetFact` exception the instruction walk
+        // needed has no counterpart here.
+        const body = &function.executable_body;
+        for (body.expressions) |expression| {
+            const obligation = mir.executableExpressionAccessObligation(expression) orelse continue;
+            if (countAccessFactsForObligation(function, obligation.id) != 1) return error.InvalidAccessFact;
+        }
+        for (body.places) |place| {
+            for (place.projections[0..place.projection_count]) |projection| {
+                const obligation = mir.executablePlaceAccessObligation(projection) orelse continue;
+                if (countAccessFactsForObligation(function, obligation.id) != 1) return error.InvalidAccessFact;
+            }
+        }
+        return;
+    }
     // Every `index` instruction is described by exactly one fact, and the
     // fact says which kind of access it is: an element read or a range slice
     // by its `AccessFact`, a comptime projection by its `ConstGetFact`. Both
@@ -300,6 +333,67 @@ fn verifyAccessFacts(function: *const mir.Function) !void {
         if (constGetFactForInstruction(function, instruction)) continue;
         return error.InvalidAccessFact;
     };
+}
+
+/// Does this function's typed body carry the resolved-access obligations its
+/// accesses own?
+///
+/// `mir_verify` asks the same question with the module in hand and also
+/// excludes a global initializer's pseudo-callable. A body plan is built from
+/// one function, so that arm is not available here -- and measured over the
+/// four fixture corpora it is not needed: a global initializer holds
+/// `address_of` facts only, and no typed index node lives in a body outside
+/// this predicate. Admitting one would fail closed here, not silently pass.
+fn typedAccessObligationsRepresented(function: *const mir.Function) bool {
+    const body = &function.executable_body;
+    return body.isComplete() and !function.is_extern and !executableBodyIsEmpty(body);
+}
+
+fn executableBodyIsEmpty(body: *const mir.ExecutableBody) bool {
+    return body.parameters.len == 0 and body.locals.len == 0 and body.symbols.len == 0 and
+        body.aggregate_types.len == 0 and body.enum_types.len == 0 and body.result_types.len == 0 and
+        body.tagged_union_types.len == 0 and body.expressions.len == 0 and body.places.len == 0 and
+        body.statements.len == 0 and body.terminators.len == 0;
+}
+
+fn countAccessFactsForObligation(function: *const mir.Function, id: mir.AccessId) usize {
+    var count: usize = 0;
+    for (function.access_facts) |fact| {
+        if (fact.accessId().eql(id)) count += 1;
+    }
+    return count;
+}
+
+/// The typed node an access fact names, and the agreements it makes with it:
+/// the access span, the operand spans read off the typed operand nodes, and
+/// the resolved result type the obligation records.
+fn accessSiteAgreesWithFact(function: *const mir.Function, fact: mir.AccessFact) bool {
+    const site = mir.executableAccessSite(&function.executable_body, fact.accessId()) orelse return false;
+    return switch (fact) {
+        .index => |access| switch (site.kind) {
+            .index_expression => site.span_id.eql(access.typed_span_id) and
+                site.base_span_id.eql(access.base_span_id) and
+                site.index_span_id.eql(access.index_span_id) and
+                typeIdMatches(function, site.result_type_id, access.result_ty),
+            .index_place => site.span_id.eql(access.typed_span_id) and
+                site.index_span_id.eql(access.index_span_id) and
+                typeIdMatches(function, site.result_type_id, access.result_ty),
+            .range_slice => false,
+        },
+        .range_slice => |access| site.kind == .range_slice and
+            site.span_id.eql(access.typed_span_id) and
+            site.base_span_id.eql(access.base_span_id) and
+            site.index_span_id.eql(access.start_span_id) and
+            site.end_span_id.eql(access.end_span_id) and
+            typeIdMatches(function, site.result_type_id, access.result_ty),
+        else => false,
+    };
+}
+
+fn typeIdMatches(function: *const mir.Function, id: mir.TypeId, ty: mir.ValueType) bool {
+    if (!id.isValid() or id.index() >= function.type_identities.len) return false;
+    const identity = function.type_identities[id.index()];
+    return identity.id.eql(id) and identity.matches(ty);
 }
 
 fn verifyRequiredAccessSpan(function: *const mir.Function, span_id: mir.SpanId) !void {

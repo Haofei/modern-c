@@ -117,6 +117,7 @@ pub const RangeFact = mir_model.RangeFact;
 pub const BoundsFact = mir_model.BoundsFact;
 pub const BoundsFactKind = mir_model.BoundsFactKind;
 pub const AccessFact = mir_model.AccessFact;
+pub const AccessId = mir_model.AccessId;
 pub const IntegerFact = mir_model.IntegerFact;
 pub const FloatFact = mir_model.FloatFact;
 pub const CallTargetKind = mir_model.CallTargetKind;

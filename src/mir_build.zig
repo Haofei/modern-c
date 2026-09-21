@@ -10794,6 +10794,55 @@ pub const FunctionBuilder = struct {
         }
     }
 
+    /// Record the resolved-access obligation on the typed node built from the
+    /// same access, so an `AccessFact` joins a node in `ExecutableBody`
+    /// rather than an `index` instruction told apart from a range slice and a
+    /// comptime projection by its `detail` string.
+    ///
+    /// The typed form of a source element access is either an `index` /
+    /// `range_slice` value expression or an `index` projection on a place,
+    /// never both for one occurrence, so the first unclaimed node of the
+    /// matching shape at this access span is this access's. Claiming in order
+    /// is what would keep two accesses that share one span distinct; over the
+    /// four fixture corpora every one of the 235 index and range-slice facts
+    /// finds exactly one node, and no node is shared.
+    fn recordExecutableAccessObligation(
+        self: *FunctionBuilder,
+        kind: std.meta.Tag(AccessFact),
+        span: ast.Span,
+        obligation: mir_model.ExecutableAccessObligation,
+    ) !void {
+        if (!obligation.id.isValid()) return;
+        const span_id = try self.internSpanId(self.sourcePoint(span));
+        for (self.executable_expressions.items) |*expression| {
+            if (!expression.span_id.eql(span_id)) continue;
+            switch (expression.operation) {
+                .index => |*indexed| {
+                    if (kind != .index or indexed.access_obligation != null) continue;
+                    indexed.access_obligation = obligation;
+                    return;
+                },
+                .range_slice => |*slice| {
+                    if (kind != .range_slice or slice.access_obligation != null) continue;
+                    slice.access_obligation = obligation;
+                    return;
+                },
+                else => {},
+            }
+        }
+        if (kind != .index) return;
+        for (self.executable_places.items) |*place| {
+            for (place.projections[0..place.projection_count]) |*projection| switch (projection.*) {
+                .index => |*indexed| {
+                    if (!indexed.span_id.eql(span_id) or indexed.access_obligation != null) continue;
+                    indexed.access_obligation = obligation;
+                    return;
+                },
+                else => {},
+            };
+        }
+    }
+
     /// Link the statement appended most recently to the instruction emitted
     /// most recently. Both are the current source statement.
     fn linkLastExecutableStatementToLastInstruction(self: *FunctionBuilder) void {
@@ -14331,15 +14380,21 @@ pub const FunctionBuilder = struct {
             },
             .index => |node| {
                 const access_fact_index = self.access_facts.items.len;
+                const access_result_ty = try self.resolvedAccessValueType(expr);
+                const access_id = self.nextAccessId();
                 try self.access_facts.append(self.allocator, .{ .index = .{
-                    .result_ty = try self.resolvedAccessValueType(expr),
+                    .result_ty = access_result_ty,
                     .base_ty = try self.resolvedAccessValueType(node.base.*),
                     .index_ty = try self.resolvedAccessValueType(node.index.*),
-                    .typed_access_id = self.nextAccessId(),
+                    .typed_access_id = access_id,
                     .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
                     .base_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.base.*).span)),
                     .index_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.index.*).span)),
                 } });
+                try self.recordExecutableAccessObligation(.index, expr.span, .{
+                    .id = access_id,
+                    .result_type_id = try self.internTypeId(access_result_ty),
+                });
                 try self.addIndexBaseCheck(node.base.*, node.base.span);
                 try self.addIndexOperandCheck(node.index.*, node.index.span);
                 // OPT (annex E) — const-index bounds-check elision. When optimization is on
@@ -14394,10 +14449,12 @@ pub const FunctionBuilder = struct {
             },
             .slice => |node| {
                 const access_fact_index = self.access_facts.items.len;
+                const access_result_ty = try self.resolvedAccessValueType(expr);
+                const access_id = self.nextAccessId();
                 try self.access_facts.append(self.allocator, .{ .range_slice = .{
-                    .result_ty = try self.resolvedAccessValueType(expr),
+                    .result_ty = access_result_ty,
                     .base_ty = try self.resolvedAccessValueType(node.base.*),
-                    .typed_access_id = self.nextAccessId(),
+                    .typed_access_id = access_id,
                     .start_ty = try self.resolvedAccessValueType(node.start.*),
                     .end_ty = try self.resolvedAccessValueType(node.end.*),
                     .typed_span_id = try self.internSpanId(self.sourcePoint(expr.span)),
@@ -14405,6 +14462,10 @@ pub const FunctionBuilder = struct {
                     .start_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.start.*).span)),
                     .end_span_id = try self.internSpanId(self.sourcePoint(canonicalOperatorOperand(node.end.*).span)),
                 } });
+                try self.recordExecutableAccessObligation(.range_slice, expr.span, .{
+                    .id = access_id,
+                    .result_type_id = try self.internTypeId(access_result_ty),
+                });
                 try self.addIndexBaseCheck(node.base.*, node.base.span);
                 try self.addIndexOperandCheck(node.start.*, node.start.span);
                 try self.addIndexOperandCheck(node.end.*, node.end.span);

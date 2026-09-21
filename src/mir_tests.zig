@@ -7493,6 +7493,92 @@ test "MIR verifier rejects malformed structural access facts" {
     try std.testing.expectError(error.InvalidSpanIdentity, mir_body_plan.verify(misaligned));
 }
 
+test "MIR verifier refuses a resolved access fact retargeted off its typed node" {
+    // DIAGNOSTIC_UNIT: E_MIR_ACCESS_FACT
+    //
+    // Not a fixture: no MC source produces a module whose access fact names
+    // an AccessId no typed node carries. The point is that the join is the
+    // identity and not the span -- the instruction stream still agrees with
+    // this fact about its span, its result type and both operand spans, so
+    // the walk this replaced would have admitted it.
+    const source =
+        \\fn access_shapes(values: [4]u32, i: usize) -> u32 {
+        \\    return values[i];
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_access_fact_retarget.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer typed_mir.deinit();
+    const function = functionByNameMut(&typed_mir, "access_shapes") orelse return error.TestUnexpectedResult;
+
+    // The unmutated module is admitted, so the refusal below is the
+    // retargeting and not some other malformation.
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    try std.testing.expect(!reporter.has_errors);
+    try mir_body_plan.verify(function);
+
+    var retargeted = false;
+    for (function.access_facts) |*fact| switch (fact.*) {
+        .index => |*access| {
+            access.typed_access_id = mir.AccessId.fromIndex(function.access_facts.len + 8);
+            retargeted = true;
+            break;
+        },
+        else => {},
+    };
+    try std.testing.expect(retargeted);
+    try std.testing.expectError(error.InvalidAccessFact, mir_body_plan.verify(function));
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    try std.testing.expect(reporter.has_errors);
+}
+
+test "MIR verifier refuses a resolved access fact retyped away from its obligation" {
+    // DIAGNOSTIC_UNIT: E_MIR_ACCESS_FACT
+    //
+    // Not a fixture for the same reason: the result type is edited in the
+    // built module. The obligation records the resolved access type the
+    // builder recorded, so a fact that claims another one disagrees with the
+    // typed body rather than with an `index` instruction's `result_ty`.
+    const source =
+        \\fn access_shapes(values: [4]u32, i: usize) -> u32 {
+        \\    return values[i];
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_access_fact_retype.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer typed_mir.deinit();
+    const function = functionByNameMut(&typed_mir, "access_shapes") orelse return error.TestUnexpectedResult;
+    var retyped = false;
+    for (function.access_facts) |*fact| switch (fact.*) {
+        .index => |*access| {
+            access.result_ty = .{ .integer = "u64" };
+            retyped = true;
+            break;
+        },
+        else => {},
+    };
+    try std.testing.expect(retyped);
+    try std.testing.expectError(error.InvalidAccessFact, mir_body_plan.verify(function));
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    try std.testing.expect(reporter.has_errors);
+}
+
 test "MIR owns MMIO read write identities and complete types" {
     const source =
         \\packed bits Status: u8 { ready: bool }

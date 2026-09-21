@@ -107,7 +107,7 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
     for (mir.functions) |function| {
         verifyFunctionCfg(function, reporter);
         verifyFunctionInstructionIdentities(function, reporter);
-        verifyFunctionAccessFacts(function, reporter);
+        verifyFunctionAccessFacts(mir, function, reporter);
         verifyFunctionOwnershipEvents(mir, function, reporter);
 
         if (!isVoidLike(function.return_ty)) {
@@ -362,9 +362,26 @@ fn verifyFunctionInstructionIdentities(function: Function, reporter: *diagnostic
     }
 }
 
-fn verifyFunctionAccessFacts(function: Function, reporter: *diagnostics.Reporter) void {
+/// A resolved access joins the typed node that realizes it, by the `AccessId`
+/// the fact and the node's `ExecutableAccessObligation` share.
+///
+/// The exactly-one rule is stated over `ExecutableBody` in both directions: a
+/// fact names exactly one typed obligation, and an obligation is named by
+/// exactly one fact. That replaces two stream walks and the two `detail`
+/// tests that stood in for identities the stream did not have -- a
+/// `startsWith("range_slice")` to tell a slice from an element read, and an
+/// `eql("const_get")` to excuse a comptime projection. The typed body says
+/// which shape a node is, so a `const_get` is not an index node at all and
+/// needs no exception, and an element access is separated from a range slice
+/// by its operation rather than by a string.
+///
+/// The instruction walk remains only for a body the typed form does not
+/// represent: an incomplete body, an `extern` declaration, and a global
+/// initializer's pseudo-callable.
+fn verifyFunctionAccessFacts(module: Module, function: Function, reporter: *diagnostics.Reporter) void {
+    const typed = typedObligationsRepresented(module, function);
     for (function.access_facts, 0..) |fact, fact_index| {
-        if (!accessFactValid(function, fact)) {
+        if (!accessFactValid(module, function, fact)) {
             reporter.err(
                 sourcePointSpan(sourcePointForSpanId(function, accessFactSpanId(fact)) orelse .{ .line = 1, .column = 1 }),
                 "E_MIR_ACCESS_FACT: MIR verifier found malformed resolved access fact",
@@ -387,6 +404,32 @@ fn verifyFunctionAccessFacts(function: Function, reporter: *diagnostics.Reporter
             }
         }
     }
+    if (typed) {
+        const body = &function.executable_body;
+        for (body.expressions) |expression| {
+            const obligation = mir_model.executableExpressionAccessObligation(expression) orelse continue;
+            if (countAccessFactsForObligation(function, obligation.id) == 1) continue;
+            reporter.err(
+                sourcePointSpan(sourcePointForSpanId(function, expression.span_id) orelse .{ .line = 1, .column = 1 }),
+                "E_MIR_ACCESS_FACT: MIR verifier found typed access without resolved access fact",
+                .{},
+            );
+            return;
+        }
+        for (body.places) |place| {
+            for (place.projections[0..place.projection_count]) |projection| {
+                const obligation = mir_model.executablePlaceAccessObligation(projection) orelse continue;
+                if (countAccessFactsForObligation(function, obligation.id) == 1) continue;
+                reporter.err(
+                    sourcePointSpan(sourcePointForSpanId(function, place.span_id) orelse .{ .line = 1, .column = 1 }),
+                    "E_MIR_ACCESS_FACT: MIR verifier found typed access without resolved access fact",
+                    .{},
+                );
+                return;
+            }
+        }
+        return;
+    }
     for (function.blocks) |block| for (block.instructions) |instruction| {
         if (instruction.kind != .index) continue;
         // `const_get` has its own closed fact family and is not source-level
@@ -407,19 +450,65 @@ fn verifyFunctionAccessFacts(function: Function, reporter: *diagnostics.Reporter
     };
 }
 
-fn accessFactValid(function: Function, fact: AccessFact) bool {
+fn countAccessFactsForObligation(function: Function, id: mir_model.AccessId) usize {
+    var count: usize = 0;
+    for (function.access_facts) |fact| {
+        if (fact.accessId().eql(id)) count += 1;
+    }
+    return count;
+}
+
+/// The typed agreements an element access or range slice makes with its
+/// obligation. The operand spans are read off the typed operand *nodes*, so
+/// the fact agrees with the operands the body evaluates rather than with a
+/// copy the builder stamped on an instruction.
+fn accessSiteAgreesWithFact(function: Function, site: mir_model.ExecutableAccessSite, fact: AccessFact) bool {
+    return switch (fact) {
+        .index => |access| switch (site.kind) {
+            .index_expression => site.span_id.eql(access.typed_span_id) and
+                site.base_span_id.eql(access.base_span_id) and
+                site.index_span_id.eql(access.index_span_id) and
+                typeIdMatchesValueType(function, site.result_type_id, access.result_ty),
+            // A place projection's base is the place root and the
+            // projections before it, not an operand node, so there is no
+            // base span to agree about.
+            .index_place => site.span_id.eql(access.typed_span_id) and
+                site.index_span_id.eql(access.index_span_id) and
+                typeIdMatchesValueType(function, site.result_type_id, access.result_ty),
+            .range_slice => false,
+        },
+        .range_slice => |access| site.kind == .range_slice and
+            site.span_id.eql(access.typed_span_id) and
+            site.base_span_id.eql(access.base_span_id) and
+            site.index_span_id.eql(access.start_span_id) and
+            site.end_span_id.eql(access.end_span_id) and
+            typeIdMatchesValueType(function, site.result_type_id, access.result_ty),
+        else => false,
+    };
+}
+
+fn accessFactValid(module: Module, function: Function, fact: AccessFact) bool {
     if (!fact.accessId().isValid()) return false;
     const primary_span = accessFactSpanId(fact);
     if (!spanIdValid(function, primary_span)) return false;
+    const typed = typedObligationsRepresented(module, function);
     switch (fact) {
         .index => |access| {
             if (!accessSpanIdsValid(function, &.{ access.base_span_id, access.index_span_id })) return false;
             if (access.index_ty != .integer) return false;
+            if (typed) {
+                const site = mir_model.executableAccessSite(&function.executable_body, access.typed_access_id) orelse return false;
+                return accessSiteAgreesWithFact(function, site, fact);
+            }
             return matchingIndexInstruction(function, access.typed_span_id, access.result_ty, access.base_span_id, access.index_span_id);
         },
         .range_slice => |access| {
             if (!accessSpanIdsValid(function, &.{ access.base_span_id, access.start_span_id, access.end_span_id })) return false;
             if (!accessResultIsSlice(access.result_ty) or access.start_ty != .integer or access.end_ty != .integer) return false;
+            if (typed) {
+                const site = mir_model.executableAccessSite(&function.executable_body, access.typed_access_id) orelse return false;
+                return accessSiteAgreesWithFact(function, site, fact);
+            }
             return matchingRangeSliceInstruction(function, access.typed_span_id, access.result_ty, access.base_span_id, access.start_span_id);
         },
         .address_of => |access| {

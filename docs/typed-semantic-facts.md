@@ -65,13 +65,14 @@ Not yet typed — the honest list:
   types can share one name. Structural identity remains `TypeId`, and a
   completeness check that compares element or pointee types by `name()` is
   still approximating one.
-- **Instruction-scoped facts are side tables, and are being folded into the
-  typed body one family at a time.** They key on the instruction's identity
-  rather than on a source span -- integer, float, bounds, representation,
-  target-type, call-target, `const_get`, bind thunk, range and
-  element/range-slice access facts all carry a `typed_inst_id`. Resolved
-  accesses also key on an `AccessId`; pointer provenance keys on the place it
-  describes. The handoff, family by family:
+- **Instruction-scoped facts are side tables, and every one of the eleven
+  families now names a typed obligation in `ExecutableBody`.** They key on an
+  identity rather than on a source span -- integer, float, bounds,
+  representation, target-type, call-target, `const_get`, bind thunk, range and
+  element/range-slice access facts all carry a `typed_inst_id`, and a resolved
+  access carries its own `AccessId`, which is what its obligation names.
+  Pointer provenance keys on the place it describes. The handoff, family by
+  family:
 
   | Family | Typed obligation it names | Verifier reads |
   |---|---|---|
@@ -84,13 +85,16 @@ Not yet typed — the honest list:
   | range | `ExecutableExpression.range_obligation` (region, span, result type and the typed operation) | the typed body |
   | const_get | `ExecutableExpression.const_get_obligation`; the index is the node's own `builtin_call.const_index` | the typed body |
   | bind thunk | its target-type and call-target halves, plus `ExecutableLocalIdentity.value_id` for the closure local | the typed body |
+  | resolved access (element, range slice) | `ExecutableAccessObligation` on the `index` / `range_slice` node or the `index` place projection, named by the fact's own `AccessId` (identity plus the resolved result type) | the typed body |
 
   Every one of these falls back to the stream for a body the typed form does
   not represent -- an incomplete body, an `extern` declaration, a global
   initializer's pseudo-callable -- which is what
-  `mir_verify.typedObligationsRepresented` decides. The element/range-slice
-  access facts are the one instruction-scoped family still joined on the
-  stream alone; `todo.md` records why it is a different shape.
+  `mir_verify.typedObligationsRepresented` decides. The `address_of` and
+  `deref` arms of the access family never joined the stream at all: they are
+  checked on their spans and their operand type class, and a deref has no
+  typed expression to move to because the typed body models it as a place
+  projection. `todo.md` records the measurement.
 - **The legacy instruction stream and the typed body are joined, but the
   stream is still there.** See [the join](#the-join-between-the-two-bodies)
   below. The remaining `Instruction.detail` readers are listed in
@@ -155,7 +159,7 @@ compiled with a function body's checks rather than a statement sequence.
 `CheckedProgram` is where that distinction is recorded, so the verifier reads
 it from `CheckedCallableFact.kind` rather than guessing from the body's shape.
 
-The nine instruction-scoped fact families are unchanged by this: they continue
+The instruction-scoped fact families are unchanged by this: they continue
 to join on `typed_inst_id` with their own exactly-one invariants. One of them
 gained a typed field rather than a new join: `RepresentationFact.use` is a
 `RepresentationUseKind`, the typed form of what a `representation_use`

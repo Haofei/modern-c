@@ -1537,6 +1537,9 @@ pub const ExecutableExpression = struct {
             /// Identity of the bounds obligation this checked access owns.
             /// See `ExecutableBoundsObligation`.
             bounds_obligation: InstId = .invalid,
+            /// The resolved-access obligation this node owns. An
+            /// `AccessFact.index` names it; see `ExecutableAccessObligation`.
+            access_obligation: ?ExecutableAccessObligation = null,
         },
         range_slice: struct {
             base: ExprId,
@@ -1546,6 +1549,10 @@ pub const ExecutableExpression = struct {
             /// Identity of the bounds obligation this checked slice owns.
             /// See `ExecutableBoundsObligation`.
             bounds_obligation: InstId = .invalid,
+            /// The resolved-access obligation this node owns. An
+            /// `AccessFact.range_slice` names it; see
+            /// `ExecutableAccessObligation`.
+            access_obligation: ?ExecutableAccessObligation = null,
         },
         member: struct { base: ExprId, field_index: usize },
         slice_length: ExprId,
@@ -1836,6 +1843,12 @@ pub const ExecutablePlace = struct {
             /// Identity of the bounds obligation this checked projection
             /// owns. See `ExecutableBoundsObligation`.
             bounds_obligation: InstId = .invalid,
+            /// The resolved-access obligation this projection owns. An
+            /// `AccessFact.index` names it; an element access is an
+            /// assignment target as often as it is a value, so the
+            /// projection carries the obligation exactly as the value
+            /// expression does. See `ExecutableAccessObligation`.
+            access_obligation: ?ExecutableAccessObligation = null,
         },
         deref,
     };
@@ -2689,6 +2702,126 @@ pub fn executableBoundsObligationCount(body: *const ExecutableBody, id: InstId, 
         }
     }
     return count;
+}
+
+/// The resolved-access obligation a typed element access or range slice owns.
+///
+/// `id` is the join key: an `AccessFact` carries the same `AccessId`, which is
+/// the fact's own identity within its function, so the join is bidirectional
+/// and needs no instruction. An `index` instruction is not the identity --
+/// several instruction kinds share one access span, and the `detail` strings
+/// that told an element read from a range slice from a comptime projection
+/// are exactly what the typed body replaces.
+///
+/// `result_type_id` is the part that is not already on the node. For an
+/// element access the node's own `result_ty` does agree with the fact's, but
+/// for a range slice it does not: the typed node normalizes the constructed
+/// slice's pointer shape while the fact records the resolved access type, and
+/// only 1 of 11 range-slice facts in the fixture corpora compare equal. So
+/// the obligation records the type the fact must agree with, exactly as
+/// `ExecutableLiteralConversion` records a literal's target type rather than
+/// leaning on the node's own.
+pub const ExecutableAccessObligation = struct {
+    id: AccessId,
+    result_type_id: TypeId = .invalid,
+};
+
+/// Which typed node owns a resolved-access obligation, and the operand
+/// identities an `AccessFact` must agree with.
+///
+/// The operand spans are read off the operand *nodes* rather than copied onto
+/// the obligation, so the agreement is with the typed operands themselves.
+/// A place projection has no base operand node -- its base is the place root
+/// and the projections before it -- so `base_span_id` is `.invalid` there.
+pub const ExecutableAccessSite = struct {
+    kind: Kind,
+    span_id: SpanId,
+    result_type_id: TypeId,
+    base_span_id: SpanId = .invalid,
+    /// The element index for an `index`, the range start for a `range_slice`.
+    index_span_id: SpanId = .invalid,
+    end_span_id: SpanId = .invalid,
+
+    pub const Kind = enum { index_expression, index_place, range_slice };
+};
+
+fn executableOperandSpanId(body: *const ExecutableBody, id: ExprId) SpanId {
+    if (!id.isValid() or id.index() >= body.expressions.len) return .invalid;
+    return body.expressions[id.index()].span_id;
+}
+
+/// The one typed node that owns the access obligation named by `id`, or null
+/// when none or more than one does.
+pub fn executableAccessSite(body: *const ExecutableBody, id: AccessId) ?ExecutableAccessSite {
+    if (!id.isValid()) return null;
+    var found: ?ExecutableAccessSite = null;
+    for (body.expressions) |expression| {
+        const site: ExecutableAccessSite = switch (expression.operation) {
+            .index => |indexed| blk: {
+                const obligation = indexed.access_obligation orelse continue;
+                if (!obligation.id.eql(id)) continue;
+                break :blk .{
+                    .kind = .index_expression,
+                    .span_id = expression.span_id,
+                    .result_type_id = obligation.result_type_id,
+                    .base_span_id = executableOperandSpanId(body, indexed.base),
+                    .index_span_id = executableOperandSpanId(body, indexed.index),
+                };
+            },
+            .range_slice => |slice| blk: {
+                const obligation = slice.access_obligation orelse continue;
+                if (!obligation.id.eql(id)) continue;
+                break :blk .{
+                    .kind = .range_slice,
+                    .span_id = expression.span_id,
+                    .result_type_id = obligation.result_type_id,
+                    .base_span_id = executableOperandSpanId(body, slice.base),
+                    .index_span_id = executableOperandSpanId(body, slice.start),
+                    .end_span_id = executableOperandSpanId(body, slice.end),
+                };
+            },
+            else => continue,
+        };
+        if (found != null) return null;
+        found = site;
+    }
+    for (body.places) |place| {
+        for (place.projections[0..place.projection_count]) |projection| switch (projection) {
+            .index => |indexed| {
+                const obligation = indexed.access_obligation orelse continue;
+                if (!obligation.id.eql(id)) continue;
+                if (found != null) return null;
+                found = .{
+                    .kind = .index_place,
+                    .span_id = indexed.span_id,
+                    .result_type_id = obligation.result_type_id,
+                    .index_span_id = executableOperandSpanId(body, indexed.value),
+                };
+            },
+            else => {},
+        };
+    }
+    return found;
+}
+
+/// The resolved-access obligation a typed value expression owns, if any. The
+/// reverse half of the exactly-one invariant is stated over this and over
+/// `executablePlaceAccessObligation`: every obligation the typed body carries
+/// must be named by exactly one `AccessFact`.
+pub fn executableExpressionAccessObligation(expression: ExecutableExpression) ?ExecutableAccessObligation {
+    return switch (expression.operation) {
+        .index => |indexed| indexed.access_obligation,
+        .range_slice => |slice| slice.access_obligation,
+        else => null,
+    };
+}
+
+/// The resolved-access obligation a typed place projection owns, if any.
+pub fn executablePlaceAccessObligation(projection: ExecutablePlace.Projection) ?ExecutableAccessObligation {
+    return switch (projection) {
+        .index => |indexed| indexed.access_obligation,
+        else => null,
+    };
 }
 
 /// A representation obligation carried by a typed node: the value this node

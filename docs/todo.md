@@ -67,7 +67,7 @@ backends off syntax, is described in
 | `LowerRequest` carries only `VerifiedProgram`, output, and emission options. Legacy AST body emitters, declaration artifacts, and backend comptime providers are deleted. | `src/codegen_request.zig`, unit tests |
 | Parsing and source identity are per file; no combined textual source exists. | `src/loader.zig`, `src/module_parser.zig` |
 | Every declaration has a `DefId`; sema records an interned resolved type for every expression it types, and the MIR builder reads those instead of re-inferring where the table answers. | `src/sema_symbols.zig`, `src/sema_types.zig`, debug agree-assertions in `src/mir_build.zig` |
-| Every instruction-scoped fact joins to its instruction by identity, not by source span, with an exactly-one invariant: integer, float, bounds, representation, target-type, call-target, `const_get`, bind-thunk and range. Resolved accesses key on an `AccessId`. A span repeats -- monomorphization copies one -- so it was never an identity. | `src/mir_verify.zig`, `src/mir_body_plan.zig`, `src/mir_tests.zig` |
+| Every instruction-scoped fact names a typed obligation in `ExecutableBody` by identity, not by source span or a `detail` string, with an exactly-one invariant: integer, float, bounds, representation, target-type, call-target, `const_get`, bind-thunk, range, and resolved accesses on their own `AccessId`. A span repeats -- monomorphization copies one -- so it was never an identity. | `src/mir_verify.zig`, `src/mir_body_plan.zig`, `src/mir_tests.zig` |
 | A red sweep is a failure, not background noise, and a recorded gap is pinned to the *cause* it was recorded for, not merely to `E_BACKEND_UNSUPPORTED`. | `docs/backend-expected-failures.json` and the `backend-expected-failures-test` validator; the shared cause shape in `tools/toolchain/backend_gap_lib.py` |
 | A non-zero `mcc` exit always prints a diagnostic. | `src/diagnostics.zig`, `src/compiler_session.zig` tests |
 
@@ -75,7 +75,7 @@ backends off syntax, is described in
 
 | Priority | Work | Why, and what it depends on |
 |---|---|---|
-| P0 | Collapse MIR to the single `ExecutableBody`: the instruction-scoped fact tables are folded into typed obligations (ten of eleven families, see the note below); what is left is the access-fact family, the remaining consumers of the string `Instruction.detail` field, repointing `mir_dump.zig`, and then deleting `Function.blocks[].instructions`. | The core of the original design review. Two body representations cost every change twice. The fold had to come first, because surveying all eleven verifier families showed none could move until the typed body represented the obligations the checking instructions carry. Depends on the golden-test conversion for affordability. |
+| P0 | Collapse MIR to the single `ExecutableBody`: the instruction-scoped fact tables are folded into typed obligations (all eleven families, see the note below); what is left is the remaining consumers of the string `Instruction.detail` field, repointing `mir_dump.zig`, and then deleting `Function.blocks[].instructions`. | The core of the original design review. Two body representations cost every change twice. The fold had to come first, because surveying all eleven verifier families showed none could move until the typed body represented the obligations the checking instructions carry. Depends on the golden-test conversion for affordability. |
 | P0 | Replace the string-carrying `mir.ValueType` with type ids from the resolved table, then drop the parallel `typed_result_ty` mirrors. | Falls out once the table answers everything `ValueType.name()` is asked for. |
 | P0 | Finish the sema handoff: intrinsic call results where sema and builder share one rule, `address_of` / `borrow` / `~`, alias collapse once the emitters take spellings from the table, and deletion of the builder's own type maps once unit tests build MIR through a checker. | Each slice: record in sema, read in the builder under the agree-assertion, delete the builder copy. |
 | P1 | Give expressions a node identity that survives copying, or a per-instance span remap in monomorphization. | Unblocks monomorphizing after sema and stops instances failing closed in the resolved table. |
@@ -105,17 +105,17 @@ that the typed body does not represent as a node at all:
 | target-type | `target_type`, agreeing on `detail` (the `TargetTypeKind` tag) | **Done.** Joins a row of `ExecutableBody.target_type_obligations`, which names its owning node; see below. |
 | call-target | `call_target` | **Done.** Joins `ExecutableExpression.call_target_obligation`, or `ExecutableTerminator.call_target_obligation` for a diverging explicit trap; see below. |
 | range | `unchecked_assume` inside a `no_overflow` contract region | **Done.** Joins `ExecutableExpression.range_obligation`; several facts name one obligation, one per target label. |
-| access facts | `index` / `expr` | No. |
+| access facts | `index` / `expr` | **Done.** Joins `ExecutableAccessObligation` on the typed `index` / `range_slice` node or the `index` place projection, by the fact's own `AccessId`; see below. |
 | bind-thunk | `call_target` and `target_type`; its closure-local half really is `.local`, a joinable kind | **Done.** `ExecutableLocalIdentity` carries a `ValueId` now, so the closure local joins by a recorded correspondence rather than by spelling; see below. |
 | ownership events | none -- `verifyFunctionOwnershipEvents` does not walk the stream | Already off it. |
 | trap projection | none in `mir_verify` -- the typed body owns `trap_edges`, and a refusal is reported as `incoherent_trap_projection` from the executable-body side | Already off it. |
 
 The survey's conclusion held: this step was never eleven independent rewrites
-but one prior change made ten times. Each family needed the typed body to
+but one prior change made eleven times. Each family needed the typed body to
 *represent the obligation* its checking instruction carried, and then needed
 its fact table to name that instead of `cmp_bounds`, `target_type`,
-`call_target`, `representation_check` and friends. All ten are done. What the
-ten converged on, and where they differed:
+`call_target`, `representation_check` and friends. All eleven are done. What
+the first ten converged on, and where they differed:
 
 - **Eight carry the obligation as a field on the node that owns it.** Bounds,
   the two literal families, call-target, range and `const_get` each found a
@@ -133,10 +133,8 @@ Every family keeps its instruction walk behind `typedObligationsRepresented`,
 for the three body shapes the typed form does not represent: an incomplete
 body, an `extern` declaration, and a global initializer's pseudo-callable.
 
-What is left on this list is the **access-fact family**, which is a different
-shape again: it keys on an `AccessId` as well as an instruction, and the
-`index` / `expr` instructions it joins on are the ones the typed body does
-represent.
+The eleventh, **access facts**, is the one whose instruction the typed body
+*does* represent, and it needed no new identity at all; see below.
 
 ### Note: how the bounds family left the instruction stream
 
@@ -180,6 +178,66 @@ not block canonical lowering -- `lower-c canonical executable body does not
 depend on legacy bounds facts` is that contract -- and requiring a fact per
 obligation would make the legacy table load-bearing again, which is the
 opposite of the goal.
+
+### Note: how the access family left the instruction stream
+
+**The one family whose instruction the typed body already represents**, and
+the only one that needed no new identity: an `AccessFact` already carries its
+own `AccessId`, so the node names *that* and the join is bidirectional with
+nothing borrowed from the stream.
+
+Measured first, over every fixture in `tests/c_emit`, `tests/spec`,
+`tests/std` and `tests/exec` — 392 access facts in all:
+
+| Family | Facts | Typed nodes at the fact's access |
+|---|---|---|
+| `index` | 224 | exactly one, every time: 128 `index` value expressions and 96 `index` place projections |
+| `range_slice` | 11 | exactly one `range_slice` expression, every time |
+| `index` in a body the typed form does not represent | 2 | none — an incomplete body, which is the fallback's only remaining caller |
+| `address_of` | 111 | 102 find their `address_of` node; 9 are in an incomplete body or a global initializer |
+| `deref` | 44 | none — a deref is a *place projection* in the typed body, not an expression |
+
+No fact anywhere found *several* nodes, and no typed `index`, `range_slice`
+or `index`-projection node exists outside a represented body. So the fold is a
+bijection rather than a container problem, and it is stated as one in both
+directions: a fact names exactly one obligation, an obligation is named by
+exactly one fact.
+
+`address_of` and `deref` are deliberately left where they are. Neither ever
+joined the instruction stream — `accessFactValid` checked only their spans and
+their operand type class — so there is no stream read to remove, and the
+measurement says `deref` has no node to move to anyway.
+
+**What the obligation carries, and why it is not bare.** Like the
+literal-conversion obligation, it is a pair:
+`ExecutableAccessObligation` is `{ id: AccessId, result_type_id: TypeId }`.
+The identity would be enough for an element access, whose node's own
+`result_ty` agrees with the fact's in all 128 cases. It is not enough for a
+range slice: the typed node normalizes the constructed slice's pointer shape
+while the fact records the resolved access type, and only **1 of 11**
+range-slice facts compare equal (6 of 11 through the node's `type_id`). So
+the obligation records the type the fact must agree with, exactly as
+`ExecutableLiteralConversion` records a literal's target type rather than
+leaning on the node's own.
+
+**Three things got stronger, two strings went away.** The operand agreements
+are read off the typed operand *nodes* now — the index expression's own
+`span_id`, the slice's start and end — rather than off `typed_base_operand_span_id`
+and friends, which the builder stamped on the instruction from the same
+values it stamped on the fact. Measured, those agree in 235 of 235. And both
+`detail` tests are gone rather than restated: `startsWith(instruction.detail,
+"range_slice")`, which told an element read from a slice, and
+`eql(instruction.detail, "const_get")`, the exception that excused a comptime
+projection from carrying an access fact. The typed body says which shape a
+node is — a `const_get` is a `builtin_call` and not an index node at all — so
+the second test has no counterpart to restate.
+
+`mir_body_plan.verify` states the same rule, with one difference it records in
+its own comment: a body plan is built from one function, so the
+global-initializer arm of `typedObligationsRepresented` is not available to it.
+It is not needed — a global initializer holds `address_of` facts only, and no
+typed index node lives outside the predicate — and admitting one would fail
+closed rather than silently pass.
 
 ### Note: what a literal-conversion obligation records, and why not the node's type
 
