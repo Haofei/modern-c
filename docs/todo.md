@@ -75,7 +75,7 @@ backends off syntax, is described in
 
 | Priority | Work | Why, and what it depends on |
 |---|---|---|
-| P0 | Collapse MIR to the single `ExecutableBody`: move the remaining consumers of the string `Instruction.detail` field off it (see the note below), rewrite the legacy-stream checks in `mir_verify.zig` against the typed body (see the note on what blocks the first family), fold instruction-scoped fact tables into typed nodes, repoint `mir_dump.zig`, then delete `Function.blocks[].instructions`. | The core of the original design review. Two body representations cost every change twice. Depends on the golden-test conversion below for affordability. |
+| P0 | Collapse MIR to the single `ExecutableBody`: move the remaining consumers of the string `Instruction.detail` field off it (see the note below), **fold the instruction-scoped fact tables into typed nodes first**, then rewrite the legacy-stream checks in `mir_verify.zig` against the typed body, repoint `mir_dump.zig`, then delete `Function.blocks[].instructions`. | The core of the original design review. Two body representations cost every change twice. The fold now comes first: surveying all eleven verifier families showed none of them can move until the typed body represents the obligations the checking instructions carry -- see the note below. Depends on the golden-test conversion for affordability. |
 | P0 | Replace the string-carrying `mir.ValueType` with type ids from the resolved table, then drop the parallel `typed_result_ty` mirrors. | Falls out once the table answers everything `ValueType.name()` is asked for. |
 | P0 | Finish the sema handoff: intrinsic call results where sema and builder share one rule, `address_of` / `borrow` / `~`, alias collapse once the emitters take spellings from the table, and deletion of the builder's own type maps once unit tests build MIR through a checker. | Each slice: record in sema, read in the builder under the agree-assertion, delete the builder copy. |
 | P1 | Give expressions a node identity that survives copying, or a per-instance span remap in monomorphization. | Unblocks monomorphizing after sema and stops instances failing closed in the resolved table. |
@@ -84,6 +84,40 @@ backends off syntax, is described in
 | P1 | Clear the remaining `docs/backend-expected-failures.json` entries or record a precise cause for each. | Each entry is a backend feature gap with a minimal reproduction. Every `E_BACKEND_UNSUPPORTED` entry now carries a machine-checked `cause` (refusing phase, category, construct, function), so an entry can no longer outlive the gap it was written for. See the note below for what is left. |
 | P2 | Split `src/mir_build.zig` by construct family and extract the shared AST-query surface still in `src/mir.zig`. | Readability. No behavior change. |
 | P2 | Audit `tools/` for scripts no gate runs; mark spec sections by maturity inline. | Hygiene. |
+
+### Note: which verifier families can leave the instruction stream
+
+Surveyed all of them before converting any, because the first one attempted
+(bounds) turned out to be blocked for a reason that generalizes. The rule is
+`mir_model.instructionJoinsExecutableBody`, whose joinable kinds are exactly
+`local`, `assign`, `assert_condition`, `defer_cleanup`, `control_transfer`,
+`return_value` and `asm_effect`. **No instruction-scoped fact family keys on
+any of them.** Every one keys on a checking or literal-conversion instruction
+that the typed body does not represent as a node at all:
+
+| Family | Instruction kind its fact joins on | Joinable? |
+|---|---|---|
+| bounds | `cmp_bounds` | No. Attempted and reverted; see below. |
+| const_get | `index` with `detail == "const_get"` | No. Also still a `detail` string test. |
+| integer literal | `integer_literal_conversion`, agreeing on `detail` (the literal spelling) | No. |
+| float literal | `expr` with `detail == "float"` | No. |
+| representation | `representation_check` / `representation_use`, agreeing on `kind` and `detail` | No. |
+| target-type | `target_type`, agreeing on `detail` (the `TargetTypeKind` tag) | No. |
+| call-target | `call_target` | No. |
+| range | `unchecked_assume` inside a `no_overflow` contract region | No. |
+| access facts | `index` / `expr` | No. |
+| bind-thunk | `call_target` and `target_type`; its closure-local half really is `.local`, a joinable kind | No, for a different reason: `BindThunkFact` names the closure local by `closure_value_id`, and `ExecutableLocalIdentity` carries no `ValueId`. There is no recorded correspondence to join on, and joining by spelling would be weaker than what is there. |
+| ownership events | none -- `verifyFunctionOwnershipEvents` does not walk the stream | Already off it. |
+| trap projection | none in `mir_verify` -- the typed body owns `trap_edges`, and a refusal is reported as `incoherent_trap_projection` from the executable-body side | Already off it. |
+
+So this step of the P0 is not a sequence of eleven independent rewrites. It is
+blocked behind one prior change: the typed body needs nodes (or recorded
+identities) for the obligations the checking instructions currently carry, and
+the fact tables need to name those instead of `cmp_bounds`, `target_type`,
+`call_target`, `representation_check` and friends. Folding the
+instruction-scoped fact tables into typed nodes -- the *next* P0 bullet -- is
+what unblocks this one, not the other way round. The two ordered bullets
+should be swapped.
 
 ### Note: the bounds family cannot leave the instruction stream yet
 
