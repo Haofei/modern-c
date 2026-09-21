@@ -1129,8 +1129,8 @@ fn emitExpressionOperation(
         },
         .index => |index| {
             if (!indexSupported(body, expression.*, index)) return error.InvalidExpression;
-            const slice_scalar = if (index.kind == .slice) scalarMemoryInfo(expression.result_ty) else null;
-            const slice_aggregate = if (index.kind == .slice and slice_scalar == null)
+            const slice_load = if (index.kind == .slice) sliceElementLoad(expression.result_ty) else null;
+            const slice_aggregate = if (index.kind == .slice and slice_load == null)
                 raceAggregateLoadShape(body, expression.*) orelse return error.UnsupportedType
             else
                 null;
@@ -1157,7 +1157,16 @@ fn emitExpressionOperation(
                 try out.appendSlice(allocator, " })");
                 return;
             }
-            if (slice_scalar) |scalar| try out.print(allocator, "(({s})mc_race_load_{s}(&(", .{ scalar.c_type, scalar.helper_suffix });
+            if (slice_load) |load| if (load.pointer_element) {
+                // The helper reads the element at `usize` width, so the
+                // address is taken as one and the value is cast back to the
+                // element's own pointer type.
+                try out.appendSlice(allocator, "((");
+                try appendCType(allocator, out, body, expression.result_ty);
+                try out.print(allocator, ")mc_race_load_{s}(({s} const *)&(", .{ load.info.helper_suffix, load.info.c_type });
+            } else {
+                try out.print(allocator, "(({s})mc_race_load_{s}(&(", .{ load.info.c_type, load.info.helper_suffix });
+            };
             try out.append(allocator, '(');
             try emitExpression(allocator, out, body, index.base, depth + 1);
             try out.appendSlice(allocator, switch (index.kind) {
@@ -1179,7 +1188,7 @@ fn emitExpressionOperation(
                 try out.append(allocator, ')');
             }
             try out.append(allocator, ']');
-            if (slice_scalar != null) try out.appendSlice(allocator, ")))");
+            if (slice_load != null) try out.appendSlice(allocator, ")))");
         },
         .slice_length => |base| {
             try emitExpression(allocator, out, body, base, depth + 1);
@@ -2330,7 +2339,7 @@ fn indexSupported(
             // Slice reads preserve the race-tolerant access contract. Scalars
             // use one helper load; declared structs are rebuilt from verified
             // scalar fields instead of performing a racy aggregate copy.
-            if (scalarMemoryInfo(expression.result_ty) == null and raceAggregateLoadShape(body, expression) == null) return false;
+            if (sliceElementLoad(expression.result_ty) == null and raceAggregateLoadShape(body, expression) == null) return false;
             const child = switch (base.result_ty) {
                 .pointer => |shape| if (shape.kind == .slice) shape.child else return false,
                 .slice => |name| name,
@@ -2435,6 +2444,15 @@ fn rangeSliceSupported(
         .pointer => |shape| if (shape.kind == .slice) shape else return false,
         else => return false,
     };
+    // The renderer spells the constructed slice's type inline as
+    // `mc_slice_<mutability>_<child>`, which is a C identifier only for a
+    // primitive element. A pointer element names a *mangled* typedef the
+    // declaration collector frames, and the body renderer has no access to
+    // that name -- so admitting one here produces text that is not C. This
+    // was invisible while `indexSupported` declined a slice of pointers
+    // first; it is the refusal that now reports the gap instead of the
+    // renderer failing internally.
+    if (primitiveType(result.child) == null) return false;
     const bound: ?usize = switch (base.result_ty) {
         .array => |array| array_shape: {
             const length = array.length orelse return false;
@@ -5998,6 +6016,41 @@ fn scalarMemoryInfo(ty: mir.ValueType) ?ScalarMemoryInfo {
         .helper_suffix = suffix,
         .c_type = primitiveType(suffix) orelse return null,
         .alignment = mir.ExecutableMemoryAccess.scalarAlignment(ty) orelse return null,
+    };
+}
+
+/// How a slice element is read through the race-tolerant helper.
+///
+/// A slice read preserves the race-tolerant access contract, so the element
+/// must be a scalar the runtime has an `mc_race_load_<suffix>` helper for. A
+/// thin pointer *is* such a scalar -- it is `usize` wide -- but
+/// `scalarMemoryInfo` deliberately has no pointer case: it has 27 call sites
+/// covering every projected scalar access in the backend, and a pointer arm
+/// there would change all of them at once. This is the slice-read path only.
+const SliceElementLoad = struct {
+    info: ScalarMemoryInfo,
+    /// The element is a thin pointer. The helper reads it at `usize` width
+    /// and the loaded value is cast back to the rendered pointer type, so the
+    /// C expression still has the element's own type.
+    pointer_element: bool = false,
+};
+
+fn sliceElementLoad(ty: mir.ValueType) ?SliceElementLoad {
+    if (scalarMemoryInfo(ty)) |scalar| return .{ .info = scalar };
+    // Only a thin pointer. A slice-kind pointer is two words and has no
+    // single-word helper, which is the same reason `scalarMemoryInfo` refuses
+    // an aggregate.
+    switch (ty) {
+        .pointer => |shape| if (shape.kind == .slice) return null,
+        else => return null,
+    }
+    return .{
+        .info = .{
+            .helper_suffix = "usize",
+            .c_type = primitiveType("usize") orelse return null,
+            .alignment = mir.ExecutableMemoryAccess.scalarAlignment(ty) orelse return null,
+        },
+        .pointer_element = true,
     };
 }
 

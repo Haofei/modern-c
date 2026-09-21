@@ -257,39 +257,54 @@ neither a statement nor an expression, so the obligation needs a home on
 `ExecutableTerminator` before this family can move whole. That is the next
 step here, and it is small.
 
-### Note: `index` over a slice of pointers is not a `supportsType` gap
+### Note: the slice-of-pointer read, and the gap behind it
 
-The sweep manifest and the entry below both said the C backend's `supportsType`
-admission declines a slice whose elements are pointers. Measured, that is
-wrong, and it sent the fix at the wrong file:
+The manifest used to say the C backend's `supportsType` admission declines a
+slice whose elements are pointers. Measured, that was wrong, and it sent the
+fix at the wrong file. `supportsType` admits `[]*mut u32` already:
+`pointeeSupported` inverts the `*mut u32` element spelling through
+`pointerShapeFromSpelling` and accepts it. The refusal was in
+`mir_executable_c.indexSupported`'s `.slice` arm, because a slice read
+preserves the race-tolerant access contract and `scalarMemoryInfo` has no
+pointer case -- its `suffix` switch covers `bool`, `integer`, `float`,
+`domain_integer` and `address` only.
 
-```text
-fn pass_slice_of_pointers(items: []*mut u32) -> usize { return items.len; }   // emits fine
-fn read_slice_of_pointers(items: []*mut u32, i: usize) -> *mut u32 { return items[i]; }
-// E_BACKEND_UNSUPPORTED: ... expression `index` ... (declined by capability)
+**Closed.** A thin pointer *is* a scalar of `usize` width, so the element now
+loads through `mc_race_load_usize` and is cast back to the rendered pointer
+type:
+
+```c
+((uint32_t *)mc_race_load_usize((uintptr_t const *)&((items).ptr[i])))
 ```
 
-`supportsType` admits `[]*mut u32` already: `pointeeSupported` inverts the
-`*mut u32` element spelling through `pointerShapeFromSpelling` and accepts it.
-The refusal is in `mir_executable_c.indexSupported`, in the `.slice` arm:
+The pointer arm is `sliceElementLoad`, a slice-read-path helper, deliberately
+*not* an arm on `scalarMemoryInfo`: that has 27 call sites covering every
+projected scalar access in the backend, and a pointer case there would change
+all of them at once. `tests/c_emit/slice_of_pointer_elements.mc` is the
+fixture. The LLVM counterpart needed no cast: LLVM pointers are opaque, so its
+slice arm (which keys on `ExecutableMemoryAccess.scalarAlignment`, and a
+pointer has one) already loaded the element as `ptr`.
 
-```zig
-if (scalarMemoryInfo(expression.result_ty) == null and
-    raceAggregateLoadShape(body, expression) == null) return false;
-```
+**What it exposed.** Admitting the read made the *next* refusal reachable, and
+it failed internally rather than cleanly: `emitRangeSlice` spells the
+constructed slice's type inline as `mc_slice_<mutability>_<child>`, which is a
+C identifier only for a primitive element. A pointer element names a mangled
+typedef (`mc_slice_mut_mc_type_ptr_m_3_u32`) that only the declaration
+collector frames, and the body renderer cannot reach that name. So
+`rangeSliceSupported` now declines an element the inline spelling cannot name,
+which turns an `InternalLoweringFailure` back into the ordinary
+`E_BACKEND_UNSUPPORTED` refusal. Giving the body renderer the mangled slice
+name is the next step, and it is what the 36 functions below are waiting on.
 
-A slice read preserves the race-tolerant access contract, so the element must
-either be a scalar with a `mc_race_load_<suffix>` helper or a declared struct
-rebuilt field by field. `scalarMemoryInfo` has no pointer case -- its `suffix`
-switch covers `bool`, `integer`, `float`, `domain_integer` and `address` -- so
-a pointer element is neither, and the read fails closed.
-
-A thin pointer *is* a scalar of `usize` width, so the fix is a pointer arm in
-`scalarMemoryInfo` whose `helper_suffix` is `usize` and whose `c_type` is the
-rendered pointer type rather than a `primitiveType` lookup, plus the matching
-cast in the slice-read renderer and its LLVM counterpart. That is a renderer
-change with an emitted-C byte-identity obligation across all four corpora, not
-the one-line admission widening the entry described.
+**`data_race_semantics.mc` re-measured**, by the same method the entry records
+-- delete the failing function, re-emit, repeat. 70 functions, before and
+after; the first cause is unchanged, so the manifest entry stays with its
+`cause`. What moved is inside it: the 36 that were declined as expression
+`index` are the same 36 functions, now declined one step earlier as expression
+`range_slice`. The rest are 15 incoherent aggregate pointer aliases, 5
+indirect calls through a pointer alias copied from a parameter, 5 incoherent
+executable shapes, 4 trapping stores of a pointer into an aggregate field, 3
+`*T as [*]T` casts, and 2 array-element assignments.
 
 ### Note: why the emitted-C goldens are not a fixture corpus yet
 
@@ -381,7 +396,7 @@ One `E_BACKEND_UNSUPPORTED` entry remains in
 
 | Family | Fixtures | What it is |
 |---|---|---|
-| pointers through arrays, slices and aliases | `data_race_semantics.mc` | **Blocked, and it is not one gap.** Deleting each failing function and re-emitting enumerates 60 of them. 21 are an `index` expression over a slice whose elements are pointers: mir-build accepts those now, and the C backend declines the *read* -- in `indexSupported`'s race-tolerant slice arm, not in `supportsType`, which admits the slice type fine; see the note above for the measurement and the actual fix site. 5 more are an array of pointers reached through a pointer to it, 3 an aggregate pointer alias whose executable shape is incoherent, 1 an array-element assignment. The remaining families are a `*T as [*]T` cast kind that neither `ExecutableCastKind.classify` nor either renderer has, an indirect call through a pointer alias copied from a parameter (declined by codegen admission as `expression `local``), and a trapping store of a pointer into an aggregate field. Closed on the way past: `(&E).*`, and the slice-element rule's mir-build half. |
+| pointers through arrays, slices and aliases | `data_race_semantics.mc` | **Blocked, and it is not one gap.** Deleting each failing function and re-emitting enumerates 70 of them. 36 are a `range_slice` that builds a slice whose elements are pointers: the body renderer spells a slice type inline and cannot name the mangled typedef a pointer element needs -- see the note above for the measurement and the fix site. 15 more are an aggregate pointer alias whose executable shape is incoherent, 5 an indirect call through a pointer alias copied from a parameter, 5 an incoherent executable shape, 4 a trapping store of a pointer into an aggregate field, 3 a `*T as [*]T` cast kind that neither `ExecutableCastKind.classify` nor either renderer has, and 2 an array-element assignment. Closed on the way past: `(&E).*`, the slice-element rule's mir-build half, and the `index` read over a slice of pointers. |
 
 The five `E_EXPERIMENTAL_DYN_CODEGEN` entries are policy and stay.
 
