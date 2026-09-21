@@ -4985,6 +4985,16 @@ pub const AssignmentFinding = enum {
     assign_through_const_view,
 };
 
+/// One switch pattern-coverage refusal.
+pub const SwitchFinding = enum {
+    duplicate_switch_case,
+    unknown_enum_case,
+    closed_enum_switch_exhaustive,
+    unknown_union_case,
+    union_case_has_no_payload,
+    switch_literal_type_mismatch,
+};
+
 /// What a refusal *is*, as a value rather than as a string.
 ///
 /// One arm per finding family. A family whose diagnostic needs more than the
@@ -4994,6 +5004,7 @@ pub const FindingKind = union(enum) {
     operator: OperatorFinding,
     arithmetic_domain: ArithmeticDomainFinding,
     assignment: AssignmentFinding,
+    switch_coverage: SwitchFinding,
 };
 
 /// A refusal the MIR builder recorded while lowering a body.

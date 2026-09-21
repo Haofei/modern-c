@@ -12955,16 +12955,16 @@ pub const FunctionBuilder = struct {
             var arm_has_wildcard = false;
             for (arm.patterns) |pattern| {
                 if (wildcard_seen) {
-                    try self.addInstr(.switch_check, "duplicate_switch_case", subject_ty, pattern.span);
+                    try self.addFinding(.{ .switch_coverage = .duplicate_switch_case }, pattern.span);
                     continue;
                 }
                 switch (pattern.kind) {
                     .tag => |tag| {
                         if (union_info) |info| {
                             if (!unionContainsCase(info, tag.text)) {
-                                try self.addInstr(.switch_check, "unknown_union_case", subject_ty, tag.span);
+                                try self.addFinding(.{ .switch_coverage = .unknown_union_case }, tag.span);
                             } else {
-                                try self.addDuplicateSwitchStringCaseCheck(&union_cases_seen, tag.text, subject_ty, tag.span);
+                                try self.addDuplicateSwitchStringCaseCheck(&union_cases_seen, tag.text, tag.span);
                             }
                         } else if (isResultType(subject_ty) and !isResultNarrowingTag(tag.text)) {
                             try self.addInstr(.result_check, "switch_result_tag", subject_ty, tag.span);
@@ -12973,25 +12973,25 @@ pub const FunctionBuilder = struct {
                         }
                         if (enum_info) |info| {
                             if (!enumContainsCase(info, tag.text)) {
-                                try self.addInstr(.switch_check, "unknown_enum_case", subject_ty, tag.span);
+                                try self.addFinding(.{ .switch_coverage = .unknown_enum_case }, tag.span);
                             } else {
-                                try self.addDuplicateSwitchStringCaseCheck(&enum_cases_seen, tag.text, subject_ty, tag.span);
+                                try self.addDuplicateSwitchStringCaseCheck(&enum_cases_seen, tag.text, tag.span);
                             }
                         }
                         if (isResultType(subject_ty) and isResultNarrowingTag(tag.text)) {
-                            try self.addDuplicateSwitchStringCaseCheck(&result_cases_seen, tag.text, subject_ty, tag.span);
+                            try self.addDuplicateSwitchStringCaseCheck(&result_cases_seen, tag.text, tag.span);
                         }
                     },
                     .tag_bind => |tag_bind| {
                         binding_pattern_count += 1;
                         if (union_info) |info| {
                             if (!unionContainsCase(info, tag_bind.tag.text)) {
-                                try self.addInstr(.switch_check, "unknown_union_case", subject_ty, tag_bind.tag.span);
+                                try self.addFinding(.{ .switch_coverage = .unknown_union_case }, tag_bind.tag.span);
                             } else {
                                 if (unionCasePayloadType(info, tag_bind.tag.text) == null) {
-                                    try self.addInstr(.switch_check, "union_case_has_no_payload", subject_ty, pattern.span);
+                                    try self.addFinding(.{ .switch_coverage = .union_case_has_no_payload }, pattern.span);
                                 }
-                                try self.addDuplicateSwitchStringCaseCheck(&union_cases_seen, tag_bind.tag.text, subject_ty, tag_bind.tag.span);
+                                try self.addDuplicateSwitchStringCaseCheck(&union_cases_seen, tag_bind.tag.text, tag_bind.tag.span);
                             }
                         } else if (isResultType(subject_ty) and !isResultNarrowingTag(tag_bind.tag.text)) {
                             try self.addInstr(.result_check, "switch_result_tag", subject_ty, tag_bind.tag.span);
@@ -12999,48 +12999,48 @@ pub const FunctionBuilder = struct {
                             try self.addInstr(.result_check, "switch_result_required", subject_ty, pattern.span);
                         }
                         if (isResultType(subject_ty) and isResultNarrowingTag(tag_bind.tag.text)) {
-                            try self.addDuplicateSwitchStringCaseCheck(&result_cases_seen, tag_bind.tag.text, subject_ty, tag_bind.tag.span);
+                            try self.addDuplicateSwitchStringCaseCheck(&result_cases_seen, tag_bind.tag.text, tag_bind.tag.span);
                         }
                     },
                     .bind => binding_pattern_count += 1,
                     .wildcard => {
                         if (arm_has_wildcard) {
-                            try self.addInstr(.switch_check, "duplicate_switch_case", subject_ty, pattern.span);
+                            try self.addFinding(.{ .switch_coverage = .duplicate_switch_case }, pattern.span);
                         }
                         arm_has_wildcard = true;
                     },
                     .literal => |literal| {
                         if (arm_has_wildcard) {
-                            try self.addInstr(.switch_check, "duplicate_switch_case", subject_ty, pattern.span);
+                            try self.addFinding(.{ .switch_coverage = .duplicate_switch_case }, pattern.span);
                             continue;
                         }
                         if (subject_ty == .bool) {
                             if (switchBoolLiteralValue(literal)) |value| {
-                                try self.addDuplicateSwitchStringCaseCheck(&bool_cases_seen, if (value) "true" else "false", subject_ty, pattern.span);
+                                try self.addDuplicateSwitchStringCaseCheck(&bool_cases_seen, if (value) "true" else "false", pattern.span);
                             } else {
-                                try self.addInstr(.switch_check, "switch_literal_type_mismatch", subject_ty, literal.span);
+                                try self.addFinding(.{ .switch_coverage = .switch_literal_type_mismatch }, literal.span);
                             }
                         } else if (isMirIntegerLike(subject_ty)) {
                             if (integerLiteralValue(literal)) |value| {
                                 if (integerLiteralRangeFinding(subject_ty, literal) != null) {
-                                    try self.addInstr(.switch_check, "switch_literal_type_mismatch", subject_ty, literal.span);
+                                    try self.addFinding(.{ .switch_coverage = .switch_literal_type_mismatch }, literal.span);
                                     continue;
                                 }
                                 if (integer_cases_seen.contains(value)) {
-                                    try self.addInstr(.switch_check, "duplicate_switch_case", subject_ty, pattern.span);
+                                    try self.addFinding(.{ .switch_coverage = .duplicate_switch_case }, pattern.span);
                                 } else {
                                     try integer_cases_seen.put(value, {});
                                 }
                             } else {
-                                try self.addInstr(.switch_check, "switch_literal_type_mismatch", subject_ty, literal.span);
+                                try self.addFinding(.{ .switch_coverage = .switch_literal_type_mismatch }, literal.span);
                             }
                         } else {
-                            try self.addInstr(.switch_check, "switch_literal_type_mismatch", subject_ty, literal.span);
+                            try self.addFinding(.{ .switch_coverage = .switch_literal_type_mismatch }, literal.span);
                         }
                     },
                 }
                 if (arm_has_wildcard and pattern.kind != .wildcard) {
-                    try self.addInstr(.switch_check, "duplicate_switch_case", subject_ty, pattern.span);
+                    try self.addFinding(.{ .switch_coverage = .duplicate_switch_case }, pattern.span);
                 }
             }
             if (binding_pattern_count > 1 and arm.patterns.len > 0) {
@@ -13050,14 +13050,14 @@ pub const FunctionBuilder = struct {
         }
         if (enum_info) |info| {
             if (!info.is_open and !wildcard_seen and !switchCoversAllMirEnumCases(node, info)) {
-                try self.addInstr(.switch_check, "closed_enum_switch_exhaustive", subject_ty, node.subject.span);
+                try self.addFinding(.{ .switch_coverage = .closed_enum_switch_exhaustive }, node.subject.span);
             }
         }
     }
 
-    fn addDuplicateSwitchStringCaseCheck(self: *FunctionBuilder, seen: *std.StringHashMap(void), key: []const u8, subject_ty: ValueType, span: ast.Span) !void {
+    fn addDuplicateSwitchStringCaseCheck(self: *FunctionBuilder, seen: *std.StringHashMap(void), key: []const u8, span: ast.Span) !void {
         if (seen.contains(key)) {
-            try self.addInstr(.switch_check, "duplicate_switch_case", subject_ty, span);
+            try self.addFinding(.{ .switch_coverage = .duplicate_switch_case }, span);
         } else {
             try seen.put(key, {});
         }

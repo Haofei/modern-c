@@ -122,14 +122,18 @@ pub fn resultFindingDiagnostic(finding: []const u8) ?[]const u8 {
     return null;
 }
 
-pub fn switchFindingDiagnostic(finding: []const u8) []const u8 {
-    if (std.mem.eql(u8, finding, "duplicate_switch_case")) return "E_DUPLICATE_SWITCH_CASE";
-    if (std.mem.eql(u8, finding, "unknown_enum_case")) return "E_UNKNOWN_ENUM_CASE";
-    if (std.mem.eql(u8, finding, "closed_enum_switch_exhaustive")) return "E_CLOSED_ENUM_SWITCH_EXHAUSTIVE";
-    if (std.mem.eql(u8, finding, "unknown_union_case")) return "E_UNKNOWN_UNION_CASE";
-    if (std.mem.eql(u8, finding, "union_case_has_no_payload")) return "E_UNION_CASE_HAS_NO_PAYLOAD";
-    if (std.mem.eql(u8, finding, "switch_literal_type_mismatch")) return "E_NO_IMPLICIT_CONVERSION";
-    return "E_DUPLICATE_SWITCH_CASE";
+/// The diagnostic a switch-coverage finding is reported as. The chain this
+/// replaced ended by returning `E_DUPLICATE_SWITCH_CASE` for an unmatched
+/// spelling -- the same answer as a real duplicate case.
+pub fn switchDiagnostic(finding: mir_model.SwitchFinding) []const u8 {
+    return switch (finding) {
+        .duplicate_switch_case => "E_DUPLICATE_SWITCH_CASE",
+        .unknown_enum_case => "E_UNKNOWN_ENUM_CASE",
+        .closed_enum_switch_exhaustive => "E_CLOSED_ENUM_SWITCH_EXHAUSTIVE",
+        .unknown_union_case => "E_UNKNOWN_UNION_CASE",
+        .union_case_has_no_payload => "E_UNION_CASE_HAS_NO_PAYLOAD",
+        .switch_literal_type_mismatch => "E_NO_IMPLICIT_CONVERSION",
+    };
 }
 
 /// The diagnostic an assignment-target finding is reported as.

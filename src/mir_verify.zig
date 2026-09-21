@@ -80,7 +80,7 @@ const representationFactKind = mir_facade.representationFactKind;
 const resultFindingDiagnostic = mir_verify_util.resultFindingDiagnostic;
 const sourcePointForSpanId = mir_cleanup_cfg.sourcePointForSpanId;
 const sourcePointSpan = mir_cleanup_cfg.sourcePointSpan;
-const switchFindingDiagnostic = mir_verify_util.switchFindingDiagnostic;
+const switchDiagnostic = mir_verify_util.switchDiagnostic;
 const targetOwnerSpelling = mir_cleanup_cfg.targetOwnerSpelling;
 const uncheckedAssumeHasMatchingContract = mir_facade.uncheckedAssumeHasMatchingContract;
 const usageFindingDiagnostic = mir_verify_util.usageFindingDiagnostic;
@@ -248,14 +248,6 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                         );
                     }
                 }
-                if (instruction.kind == .switch_check) {
-                    const code = switchFindingDiagnostic(instruction.detail);
-                    reporter.err(
-                        sourcePointSpan(source),
-                        "{s}: MIR verifier found invalid switch pattern coverage",
-                        .{code},
-                    );
-                }
                 if (irqContextCallFinding(mir, function, instruction)) |finding| {
                     const code = irqContextDiagnostic(finding);
                     reporter.err(
@@ -292,6 +284,11 @@ fn reportFindings(function: Function, reporter: *diagnostics.Reporter) void {
                 sourcePointSpan(source),
                 "{s}: MIR verifier found invalid arithmetic-domain operation",
                 .{arithmeticDomainDiagnostic(domain)},
+            ),
+            .switch_coverage => |coverage| reporter.err(
+                sourcePointSpan(source),
+                "{s}: MIR verifier found invalid switch pattern coverage",
+                .{switchDiagnostic(coverage)},
             ),
             .assignment => |assignment| reporter.err(
                 sourcePointSpan(source),
