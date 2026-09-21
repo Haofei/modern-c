@@ -75,7 +75,7 @@ backends off syntax, is described in
 
 | Priority | Work | Why, and what it depends on |
 |---|---|---|
-| P0 | Collapse MIR to the single `ExecutableBody`: move the remaining consumers of the string `Instruction.detail` field off it (see the note below), rewrite the legacy-stream checks in `mir_verify.zig` against the typed body, fold instruction-scoped fact tables into typed nodes, repoint `mir_dump.zig`, then delete `Function.blocks[].instructions`. | The core of the original design review. Two body representations cost every change twice. Depends on the golden-test conversion below for affordability. |
+| P0 | Collapse MIR to the single `ExecutableBody`: move the remaining consumers of the string `Instruction.detail` field off it (see the note below), rewrite the legacy-stream checks in `mir_verify.zig` against the typed body (see the note on what blocks the first family), fold instruction-scoped fact tables into typed nodes, repoint `mir_dump.zig`, then delete `Function.blocks[].instructions`. | The core of the original design review. Two body representations cost every change twice. Depends on the golden-test conversion below for affordability. |
 | P0 | Replace the string-carrying `mir.ValueType` with type ids from the resolved table, then drop the parallel `typed_result_ty` mirrors. | Falls out once the table answers everything `ValueType.name()` is asked for. |
 | P0 | Finish the sema handoff: intrinsic call results where sema and builder share one rule, `address_of` / `borrow` / `~`, alias collapse once the emitters take spellings from the table, and deletion of the builder's own type maps once unit tests build MIR through a checker. | Each slice: record in sema, read in the builder under the agree-assertion, delete the builder copy. |
 | P1 | Give expressions a node identity that survives copying, or a per-instance span remap in monomorphization. | Unblocks monomorphizing after sema and stops instances failing closed in the resolved table. |
@@ -84,6 +84,69 @@ backends off syntax, is described in
 | P1 | Clear the remaining `docs/backend-expected-failures.json` entries or record a precise cause for each. | Each entry is a backend feature gap with a minimal reproduction. Every `E_BACKEND_UNSUPPORTED` entry now carries a machine-checked `cause` (refusing phase, category, construct, function), so an entry can no longer outlive the gap it was written for. See the note below for what is left. |
 | P2 | Split `src/mir_build.zig` by construct family and extract the shared AST-query surface still in `src/mir.zig`. | Readability. No behavior change. |
 | P2 | Audit `tools/` for scripts no gate runs; mark spec sections by maturity inline. | Hygiene. |
+
+### Note: the bounds family cannot leave the instruction stream yet
+
+Attempted and reverted, measured rather than assumed. `validateBoundsFactsForLowering`
+was rewritten to count a fact's checked access in the `ExecutableBody` instead
+of counting `cmp_bounds` instructions by `detail` string. Two things came out:
+
+- The join key is not the node's own span. A bounds fact keys on the same span
+  the resolved access fact uses, and that is *not the same span for both
+  kinds*: an index keys on its **operand** (`i` in `a[i]`, matching
+  `AccessFact.index.index_span_id`), a range slice on the **whole access**
+  (`AccessFact.range_slice.typed_span_id`). Keying an index on its own node
+  span silently collapses distinct checks. Fixing that took the failure count
+  from 9 tests to 2.
+- The remaining 2 are the real blocker, and `bounds facts distinguish two
+  checks that share one span` is the one that names it. **`cmp_bounds` is not
+  a joinable instruction kind.** It is not in
+  `mir_model.instructionJoinsExecutableBody`, and it has no typed node at all:
+  the typed body carries the obligation as `checked: bool` on the `index`
+  expression or the `index` place projection, not as a separate check node. So
+  two `cmp_bounds` checks at one span are one typed node, and the
+  exactly-one-fact-per-check rule -- which is the whole point of the
+  invariant -- cannot be stated over the typed body.
+
+What this family needs first is a typed node for the check, or a bounds
+obligation identity on the index node that a fact can name. Until then the
+legacy walk stays. The typed-body walk is strictly stronger in one respect
+worth keeping when that lands: it sees `checked`, so an elided bound no longer
+looks like a checked one, which the `detail` string never distinguished.
+
+### Note: `index` over a slice of pointers is not a `supportsType` gap
+
+The sweep manifest and the entry below both said the C backend's `supportsType`
+admission declines a slice whose elements are pointers. Measured, that is
+wrong, and it sent the fix at the wrong file:
+
+```text
+fn pass_slice_of_pointers(items: []*mut u32) -> usize { return items.len; }   // emits fine
+fn read_slice_of_pointers(items: []*mut u32, i: usize) -> *mut u32 { return items[i]; }
+// E_BACKEND_UNSUPPORTED: ... expression `index` ... (declined by capability)
+```
+
+`supportsType` admits `[]*mut u32` already: `pointeeSupported` inverts the
+`*mut u32` element spelling through `pointerShapeFromSpelling` and accepts it.
+The refusal is in `mir_executable_c.indexSupported`, in the `.slice` arm:
+
+```zig
+if (scalarMemoryInfo(expression.result_ty) == null and
+    raceAggregateLoadShape(body, expression) == null) return false;
+```
+
+A slice read preserves the race-tolerant access contract, so the element must
+either be a scalar with a `mc_race_load_<suffix>` helper or a declared struct
+rebuilt field by field. `scalarMemoryInfo` has no pointer case -- its `suffix`
+switch covers `bool`, `integer`, `float`, `domain_integer` and `address` -- so
+a pointer element is neither, and the read fails closed.
+
+A thin pointer *is* a scalar of `usize` width, so the fix is a pointer arm in
+`scalarMemoryInfo` whose `helper_suffix` is `usize` and whose `c_type` is the
+rendered pointer type rather than a `primitiveType` lookup, plus the matching
+cast in the slice-read renderer and its LLVM counterpart. That is a renderer
+change with an emitted-C byte-identity obligation across all four corpora, not
+the one-line admission widening the entry described.
 
 ### Note: why the emitted-C goldens are not a fixture corpus yet
 
@@ -175,7 +238,7 @@ One `E_BACKEND_UNSUPPORTED` entry remains in
 
 | Family | Fixtures | What it is |
 |---|---|---|
-| pointers through arrays, slices and aliases | `data_race_semantics.mc` | **Blocked, and it is not one gap.** Deleting each failing function and re-emitting enumerates 60 of them. 21 are an `index` expression over a slice whose elements are pointers: mir-build accepts those now, and the C backend's own `supportsType` admission still declines the element type. 5 more are an array of pointers reached through a pointer to it, 3 an aggregate pointer alias whose executable shape is incoherent, 1 an array-element assignment. The remaining families are a `*T as [*]T` cast kind that neither `ExecutableCastKind.classify` nor either renderer has, an indirect call through a pointer alias copied from a parameter (declined by codegen admission as `expression `local``), and a trapping store of a pointer into an aggregate field. Closed on the way past: `(&E).*`, and the slice-element rule's mir-build half. |
+| pointers through arrays, slices and aliases | `data_race_semantics.mc` | **Blocked, and it is not one gap.** Deleting each failing function and re-emitting enumerates 60 of them. 21 are an `index` expression over a slice whose elements are pointers: mir-build accepts those now, and the C backend declines the *read* -- in `indexSupported`'s race-tolerant slice arm, not in `supportsType`, which admits the slice type fine; see the note above for the measurement and the actual fix site. 5 more are an array of pointers reached through a pointer to it, 3 an aggregate pointer alias whose executable shape is incoherent, 1 an array-element assignment. The remaining families are a `*T as [*]T` cast kind that neither `ExecutableCastKind.classify` nor either renderer has, an indirect call through a pointer alias copied from a parameter (declined by codegen admission as `expression `local``), and a trapping store of a pointer into an aggregate field. Closed on the way past: `(&E).*`, and the slice-element rule's mir-build half. |
 
 The five `E_EXPERIMENTAL_DYN_CODEGEN` entries are policy and stay.
 
