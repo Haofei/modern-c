@@ -80,10 +80,35 @@ backends off syntax, is described in
 | P0 | Finish the sema handoff: intrinsic call results where sema and builder share one rule, `address_of` / `borrow` / `~`, alias collapse once the emitters take spellings from the table, and deletion of the builder's own type maps once unit tests build MIR through a checker. | Each slice: record in sema, read in the builder under the agree-assertion, delete the builder copy. |
 | P1 | Give expressions a node identity that survives copying, or a per-instance span remap in monomorphization. | Unblocks monomorphizing after sema and stops instances failing closed in the resolved table. |
 | P1 | Bring the C backend's `ast_bridge` / `type_bridge` imports to zero, one file at a time. | The exceptions table in `src/architecture_boundary_tests.zig` is the countdown. LLVM is already at zero. |
-| P1 | Finish converting golden tests into fixtures: the MIR *dump* corpus is `tests/mir/` and the MIR *verification-fact* corpus is now `tests/mir_verify/` (see `test-architecture.md`); the emitted-C goldens in `src/lower_c_tests.zig` are still in-Zig golden strings. | The in-Zig golden strings are the largest consumer of the legacy instruction stream and the reason representation changes turn into mass test rewrites. |
+| P1 | Finish converting golden tests into fixtures: the MIR *dump* corpus is `tests/mir/` and the MIR *verification-fact* corpus is now `tests/mir_verify/` (see `test-architecture.md`); the emitted-C goldens in `src/lower_c_tests.zig` are still in-Zig golden strings, and need a grammar they do not have yet — see the note below. | The in-Zig golden strings are the largest consumer of the legacy instruction stream and the reason representation changes turn into mass test rewrites. |
 | P1 | Clear the remaining `docs/backend-expected-failures.json` entries or record a precise cause for each. | Each entry is a backend feature gap with a minimal reproduction. Every `E_BACKEND_UNSUPPORTED` entry now carries a machine-checked `cause` (refusing phase, category, construct, function), so an entry can no longer outlive the gap it was written for. See the note below for what is left. |
 | P2 | Split `src/mir_build.zig` by construct family and extract the shared AST-query surface still in `src/mir.zig`. | Readability. No behavior change. |
 | P2 | Audit `tools/` for scripts no gate runs; mark spec sections by maturity inline. | Hygiene. |
+
+### Note: why the emitted-C goldens are not a fixture corpus yet
+
+Measured over all 425 tests in `src/lower_c_tests.zig`, not estimated. The MIR
+verification-fact corpus converted cleanly because every one of those tests had
+the same shape: one program, one dump, a list of substrings. The emitted-C
+tests do not:
+
+| Count | Shape | Why the `tests/mir_verify/` grammar cannot hold it |
+|---|---|---|
+| 220 | assert through `cFunctionBody(output, "<signature prefix>")` | The assertion is scoped to **one function's emitted body**. A `+ "needle"` over the whole file is a strictly weaker claim -- it would pass when the needle lands in a different function -- so converting these as-is would weaken 220 tests. |
+| 160 | build the MIR inline, 17 of them through `…WithoutRangeFacts` / `…WithRetargetedRangeFacts` / `…WithoutPointerProvenanceFactsForSubject` / `…WithoutAggregateReturnPointerFact` | The fixture is a *program*; these lower a program whose fact tables were edited by hand afterwards, to prove the renderer fails closed when a fact is missing. No MC source produces that module. |
+| 37 | pass a `diagnostics.Reporter` and assert on what lowering reported | Needs the diagnostics channel in the matched text, as `tests/mir_verify/` does -- cheap, but only after the two above are settled. |
+| 4 | already the uniform shape | Not worth a corpus on their own. |
+
+`tests/c_emit/` was checked first and has no expected-output mechanism to
+reuse: `check-generated-c.sh` asserts only that a fixture emits and that clang
+accepts it, never what the C says.
+
+So the blocker is a *grammar* gap, not a volume problem. The corpus needs at
+least a scope rule (`in "<signature prefix>": + "needle"`, matching against
+that function's body the way `cFunctionBody` does) and a profile/checks
+selector line, before any of the 220 can move without losing what they prove.
+Adding those to `src/fixture_expect.zig` is the next step; the 4 uniform tests
+are not a reason to start the corpus before it can hold the other 421.
 
 ### Note: the `Instruction.detail` readers that are left
 
